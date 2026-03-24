@@ -1,24 +1,24 @@
 {
-  "name": "backend",
+  "name": "job-hunt-os-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "nodemon --delay 500ms src/index.js",
+    "start": "node src/index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.80.0",
-    "@notionhq/client": "^5.14.0",
-    "axios": "^1.13.6",
-    "cheerio": "^1.2.0",
-    "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
-    "express": "^5.2.1"
+    "@anthropic-ai/sdk": "latest",
+    "@notionhq/client": "latest",
+    "axios": "latest",
+    "cheerio": "latest",
+    "cors": "latest",
+    "docx": "^9.6.1",
+    "dotenv": "latest",
+    "express": "latest",
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "nodemon": "latest"
   }
 }

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JobHuntOS — Profile Setup</title>
+  <link rel="stylesheet" href="setup.css" />
+</head>
+<body>
+  <div id="setupApp">
+
+    <!-- Header -->
+    <header class="setup-header">
+      <div class="setup-logo">
+        <div class="setup-logo-icon">⚡</div>
+        <span class="setup-logo-text">JobHunt<span class="logo-os">OS</span></span>
+      </div>
+    </header>
+
+    <!-- Main content -->
+    <div class="setup-body">
+      <div class="setup-intro">
+        <p class="setup-title">Set Up Your Profile</p>
+        <p class="setup-sub">Upload your resume so Claude can tailor job analysis to you specifically.</p>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tab-bar">
+        <button class="tab-btn active" data-tab="upload">Upload File</button>
+        <button class="tab-btn" data-tab="paste">Paste Resume</button>
+        <button class="tab-btn" data-tab="linkedin">LinkedIn</button>
+      </div>
+
+      <!-- Upload tab -->
+      <div class="tab-panel" id="tab-upload">
+        <div class="dropzone" id="dropzone">
+          <div class="dropzone-icon">📄</div>
+          <p class="dropzone-title">Drop your resume here</p>
+          <p class="dropzone-sub">PDF or DOCX — max 5MB</p>
+          <button class="btn-browse" id="browseBtn">Browse Files</button>
+          <input type="file" id="fileInput" accept=".pdf,.docx" hidden />
+        </div>
+        <div class="file-selected hidden" id="fileSelected">
+          <span class="file-icon">📎</span>
+          <span class="file-name" id="fileName">—</span>
+          <button class="btn-clear-file" id="clearFileBtn">✕</button>
+        </div>
+      </div>
+
+      <!-- LinkedIn tab -->
+      <div class="tab-panel hidden" id="tab-linkedin">
+        <div class="linkedin-info">
+          <div class="linkedin-icon">in</div>
+          <p class="linkedin-title">Use your LinkedIn profile</p>
+          <p class="linkedin-desc">Navigate to your LinkedIn profile page, then click the button below to extract your info automatically.</p>
+        </div>
+        <button class="btn-use-linkedin" id="useLinkedInBtn">
+          Extract from Current LinkedIn Page
+        </button>
+        <p class="linkedin-hint" id="linkedinHint">Make sure you're on your own LinkedIn profile page (linkedin.com/in/yourname)</p>
+      </div>
+
+      <!-- Paste tab -->
+      <div class="tab-panel hidden" id="tab-paste">
+        <textarea
+          id="pasteArea"
+          class="paste-textarea"
+          placeholder="Paste your resume text here…&#10;&#10;Include: name, contact info, work experience with metrics, skills, projects, education."
+          rows="10"
+        ></textarea>
+        <p class="paste-hint" id="pasteCharCount">0 characters</p>
+      </div>
+
+      <!-- Status messages -->
+      <div class="setup-status hidden" id="setupStatus">
+        <span id="setupStatusMsg"></span>
+      </div>
+
+      <!-- Save button -->
+      <button class="btn-save-profile" id="saveProfileBtn">
+        <span id="saveProfileBtnInner">Save Profile &amp; Continue →</span>
+      </button>
+
+      <!-- Edit mode note (shown when editing existing profile) -->
+      <button class="btn-skip" id="skipBtn">← Back to analyzer</button>
+
+    </div>
+  </div>
+
+  <script src="setup.js"></script>
+</body>
+</html>

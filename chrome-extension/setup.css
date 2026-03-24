@@ -1,0 +1,377 @@
+/* ── Reset & base ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0f0f1a;
+  --card:      #1a1a2e;
+  --border:    #2a2a4a;
+  --text:      #e2e8f0;
+  --sub:       #8892a4;
+  --accent:    #6c63ff;
+  --accent-dim:#6c63ff33;
+  --green:     #22c55e;
+  --green-dim: #22c55e22;
+  --red:       #ef4444;
+  --red-dim:   #ef444422;
+  --amber:     #f59e0b;
+  --radius:    10px;
+  --font:      -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ── */
+.setup-header {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+.setup-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.setup-logo-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.setup-logo-text {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+
+.logo-os {
+  color: var(--accent);
+}
+
+/* ── Body ── */
+.setup-body {
+  flex: 1;
+  padding: 20px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 480px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.setup-intro {
+  text-align: center;
+}
+
+.setup-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.setup-sub {
+  color: var(--sub);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ── Tabs ── */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font);
+}
+
+.tab-btn:hover {
+  color: var(--text);
+  background: #ffffff08;
+}
+
+.tab-btn.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ── Tab panels ── */
+.tab-panel { display: flex; flex-direction: column; gap: 10px; }
+.tab-panel.hidden { display: none; }
+
+/* ── Dropzone ── */
+.dropzone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 32px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropzone:hover,
+.dropzone.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.dropzone-icon {
+  font-size: 32px;
+  margin-bottom: 4px;
+}
+
+.dropzone-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dropzone-sub {
+  font-size: 12px;
+  color: var(--sub);
+  margin-bottom: 8px;
+}
+
+.btn-browse {
+  padding: 7px 16px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: opacity 0.15s;
+}
+
+.btn-browse:hover { opacity: 0.85; }
+
+/* ── File selected indicator ── */
+.file-selected {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--green-dim);
+  border: 1px solid var(--green);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+}
+
+.file-selected.hidden { display: none; }
+
+.file-icon { font-size: 16px; }
+
+.file-name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--green);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-clear-file {
+  background: none;
+  border: none;
+  color: var(--sub);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.btn-clear-file:hover { color: var(--red); }
+
+/* ── LinkedIn tab ── */
+.linkedin-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  padding: 20px 12px 12px;
+}
+
+.linkedin-icon {
+  width: 40px; height: 40px;
+  background: #0a66c2;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: -1px;
+  margin-bottom: 4px;
+}
+
+.linkedin-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.linkedin-desc {
+  font-size: 12px;
+  color: var(--sub);
+  line-height: 1.5;
+  max-width: 300px;
+}
+
+.btn-use-linkedin {
+  width: 100%;
+  padding: 11px 16px;
+  background: #0a66c2;
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: opacity 0.15s;
+}
+
+.btn-use-linkedin:hover:not(:disabled) { opacity: 0.85; }
+.btn-use-linkedin:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.linkedin-hint {
+  font-size: 11px;
+  color: var(--sub);
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* ── Paste textarea ── */
+.paste-textarea {
+  width: 100%;
+  min-height: 180px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font);
+  padding: 12px;
+  resize: vertical;
+  line-height: 1.6;
+  transition: border-color 0.15s;
+}
+
+.paste-textarea::placeholder { color: var(--sub); }
+
+.paste-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.paste-hint {
+  font-size: 11px;
+  color: var(--sub);
+  text-align: right;
+  margin-top: -4px;
+}
+
+/* ── Status ── */
+.setup-status {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  color: var(--text);
+}
+
+.setup-status.hidden { display: none; }
+.setup-status.error  { background: var(--red-dim); border-color: var(--red); color: var(--red); }
+.setup-status.success{ background: var(--green-dim); border-color: var(--green); color: var(--green); }
+
+/* ── Save button ── */
+.btn-save-profile {
+  padding: 12px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: opacity 0.15s;
+  letter-spacing: 0.2px;
+}
+
+.btn-save-profile:hover:not(:disabled) { opacity: 0.85; }
+
+.btn-save-profile:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Loading spinner inside button */
+.setup-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Skip / back button ── */
+.btn-skip {
+  background: none;
+  border: none;
+  color: var(--sub);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font);
+  text-align: center;
+  padding: 4px;
+  transition: color 0.15s;
+}
+
+.btn-skip:hover { color: var(--text); }
+
+/* Hide skip button when there's no existing profile */
+.btn-skip.hidden { display: none; }
