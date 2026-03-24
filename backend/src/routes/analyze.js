@@ -245,4 +245,107 @@ router.post("/generate-resume", async (req, res) => {
   }
 });
 
+// ── POST /api/generate-autofill ─────────────────────────────────────────────
+router.post("/generate-autofill", async (req, res) => {
+  const { userProfile, jobAnalysis, formFields } = req.body;
+
+  if (!userProfile || !formFields?.length) {
+    return res.status(400).json({ error: "userProfile and formFields are required" });
+  }
+
+  const { company = '', role = '', fitScore = 0, resumeBullets = [], topKeywords = [] } = jobAnalysis || {};
+
+  // Build a concise field list for the prompt
+  const fieldList = formFields.map(f => {
+    let desc = `"${f.label}" (${f.type}${f.name ? ', name=' + f.name : ''})`;
+    if (f.options?.length) desc += ` options: [${f.options.slice(0, 8).join(', ')}]`;
+    return desc;
+  }).join('\n');
+
+  const prompt = `You are filling a job application form for ${role} at ${company}.
+
+Candidate profile:
+${String(userProfile).slice(0, 500)}
+
+Job context: Fit score ${fitScore}/100. Keywords: ${topKeywords.join(', ')}.
+Tailored bullets:
+${resumeBullets.map(b => `- ${b}`).join('\n')}
+
+Form fields to fill:
+${fieldList}
+
+Rules:
+- coverLetter: 3 short paragraphs tailored to ${company}, use their keywords, mention specific metrics, sound human
+- whyCompany/aboutYourself: 2-3 sentences specific to ${company}'s mission
+- workAuth: "Yes" if US-authorized profile, else "SKIP"
+- sponsorship: "No" if authorized, else "SKIP"
+- salary/expectedSalary: "Negotiable"
+- referralSource: "Online Job Board"
+- startDate: "2 weeks notice" or "Immediately"
+- workType: extract from profile or "Open to all"
+- For fields you cannot reasonably fill, return "SKIP"
+- Extract phone/email/linkedin/github/gpa/degree/university from profile text
+
+Return ONLY a JSON object (no markdown, no explanation):
+{
+  "firstName": "...",
+  "lastName": "...",
+  "fullName": "...",
+  "email": "...",
+  "phone": "...",
+  "linkedin": "...",
+  "github": "...",
+  "portfolio": "...",
+  "city": "...",
+  "state": "...",
+  "country": "US",
+  "degree": "...",
+  "university": "...",
+  "major": "...",
+  "gpa": "...",
+  "gradYear": "...",
+  "yearsExp": "...",
+  "currentTitle": "...",
+  "currentCompany": "...",
+  "salary": "Negotiable",
+  "workAuth": "Yes",
+  "sponsorship": "No",
+  "coverLetter": "...",
+  "whyCompany": "...",
+  "aboutYourself": "...",
+  "skills": "...",
+  "strength": "...",
+  "startDate": "2 weeks notice",
+  "referralSource": "Online Job Board"
+}`;
+
+  try {
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const client    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const message = await client.messages.create({
+      model:      "claude-haiku-4-5-20251001",
+      max_tokens: 1200,
+      messages:   [{ role: "user", content: prompt }],
+    });
+
+    const raw  = message.content[0]?.text?.trim() || '{}';
+    const json = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+
+    let autofillValues;
+    try {
+      autofillValues = JSON.parse(json);
+    } catch {
+      // Try to extract the first {...} block
+      const match = json.match(/\{[\s\S]*\}/);
+      autofillValues = match ? JSON.parse(match[0]) : {};
+    }
+
+    return res.json({ autofillValues });
+  } catch (err) {
+    console.error("generate-autofill error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

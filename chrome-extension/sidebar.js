@@ -549,7 +549,10 @@
     lastAnalysis = null;
     savedUrl     = null;
     savedPageId  = null;
+    autofillActive = false;
     $('resumeSection').classList.add('hidden');
+    $('autofillBtn').classList.add('hidden');
+    $('autofillSummary').classList.add('hidden');
     $('welcomeSub').textContent = msg || 'Ready to analyze — click Analyze This Job';
     showOnly(welcomeState);
   }
@@ -674,6 +677,12 @@
       tag.textContent = kw;
       kwEl.appendChild(tag);
     });
+
+    // Reset autofill state
+    autofillActive = false;
+    setAutofillIdle();
+    showAutofillBtn();
+    $('autofillSummary').classList.add('hidden');
 
     // Show skeletons for tier-2 content
     // ATS: show skeleton, hide real content, put spinner in badge
@@ -872,6 +881,92 @@
     }
   }
 
+  // ── Autofill ──
+
+  let autofillActive = false;
+
+  function showAutofillBtn() {
+    $('autofillBtn').classList.remove('hidden');
+  }
+
+  function setAutofillIdle() {
+    const btn = $('autofillBtn');
+    btn.disabled = false;
+    btn.textContent = '⚡ Autofill Application';
+    btn.className = 'btn-autofill';
+  }
+
+  function setAutofillLoading() {
+    const btn = $('autofillBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="save-spinner"></span> Generating fill values…';
+    btn.className = 'btn-autofill btn-autofill--loading';
+  }
+
+  function setAutofillDone(count, platform) {
+    autofillActive = true;
+    const btn = $('autofillBtn');
+    btn.disabled = false;
+    btn.textContent = `✓ ${count} field${count !== 1 ? 's' : ''} filled — Undo`;
+    btn.className = 'btn-autofill btn-autofill--done';
+
+    const summary = $('autofillSummary');
+    summary.classList.remove('hidden');
+    summary.innerHTML = `
+      <span class="autofill-count">⚡ ${count} fields filled on this page</span>
+      <span class="autofill-platform">Platform: ${platform}</span>
+      <span class="autofill-warning">⚠ Review all fields before submitting</span>
+    `;
+  }
+
+  function setAutofillError(msg) {
+    const btn = $('autofillBtn');
+    btn.disabled = false;
+    btn.textContent = '⚡ Autofill Application';
+    btn.className = 'btn-autofill btn-autofill--error';
+
+    const summary = $('autofillSummary');
+    summary.classList.remove('hidden');
+    summary.innerHTML = `<span class="autofill-warning">✕ ${msg}</span>`;
+  }
+
+  async function runAutofill() {
+    if (!lastAnalysis) return;
+
+    // If already filled → undo
+    if (autofillActive) {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'UNDO_AUTOFILL' }, () => {
+          autofillActive = false;
+          setAutofillIdle();
+          $('autofillSummary').classList.add('hidden');
+        });
+      });
+      return;
+    }
+
+    setAutofillLoading();
+    const profile = userProfile || '';
+
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      chrome.tabs.sendMessage(tabs[0].id, {
+        type:         'START_AUTOFILL',
+        profileData:  profile,
+        analysisData: lastAnalysis,
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          setAutofillError('Could not reach the page. Reload and try again.');
+          return;
+        }
+        if (response?.success) {
+          setAutofillDone(response.filledCount, response.platform);
+        } else {
+          setAutofillError(response?.error || 'Autofill failed.');
+        }
+      });
+    });
+  }
+
   // ── Event listeners ──
 
   $('closeBtn').addEventListener('click', () => {
@@ -914,6 +1009,10 @@
 
   $('resumeBtn').addEventListener('click', () => {
     if (!$('resumeBtn').disabled) generateResume();
+  });
+
+  $('autofillBtn').addEventListener('click', () => {
+    if (!$('autofillBtn').disabled) runAutofill();
   });
 
   // ── Messages from content.js ──

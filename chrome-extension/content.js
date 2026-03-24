@@ -227,7 +227,58 @@
 
   // ── Message from background ──
 
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'TOGGLE_SIDEBAR') toggleSidebar();
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === 'TOGGLE_SIDEBAR') { toggleSidebar(); return; }
+
+    if (msg.type === 'START_AUTOFILL') {
+      (async () => {
+        try {
+          const autofiller = new JobHuntOSAutofill(msg.profileData, msg.analysisData);
+
+          // Scan fields on this page
+          const fields = autofiller.scanFormFields();
+          if (!fields.length) {
+            sendResponse({ success: false, error: 'No fillable form fields found on this page.' });
+            return;
+          }
+
+          // Ask backend to generate values
+          const res = await fetch('http://localhost:3000/api/generate-autofill', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userProfile:  msg.profileData,
+              jobAnalysis:  msg.analysisData,
+              formFields:   fields.map(f => ({
+                label:   f.label,
+                type:    f.type,
+                name:    f.name,
+                options: f.options,
+              })),
+            }),
+          });
+
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+          // Store autofiller on window so undo can reach it
+          window._jhosAutofiller = autofiller;
+
+          const filledCount = await autofiller.autofill(data.autofillValues);
+          sendResponse({ success: true, filledCount, platform: autofiller.platform });
+        } catch (err) {
+          sendResponse({ success: false, error: err.message });
+        }
+      })();
+      return true; // keep channel open for async response
+    }
+
+    if (msg.type === 'UNDO_AUTOFILL') {
+      if (window._jhosAutofiller) {
+        window._jhosAutofiller.undo();
+        window._jhosAutofiller = null;
+      }
+      sendResponse({ success: true });
+    }
   });
 })();
