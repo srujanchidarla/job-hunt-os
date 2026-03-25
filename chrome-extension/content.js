@@ -235,10 +235,10 @@
         try {
           const autofiller = new JobHuntOSAutofill(msg.profileData, msg.analysisData);
 
-          // Scan fields on this page
-          const fields = autofiller.scanFormFields();
+          // P3 FIX: Wait for fields to actually render (React/Angular forms)
+          const fields = await autofiller.waitForFields();
           if (!fields.length) {
-            sendResponse({ success: false, error: 'No fillable form fields found on this page.' });
+            sendResponse({ success: false, error: 'No fillable form fields found on this page. Make sure you\'re on an application form.' });
             return;
           }
 
@@ -261,7 +261,7 @@
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
-          // Store autofiller on window so undo can reach it
+          // Store autofiller on window so undo message handler can reach it
           window._jhosAutofiller = autofiller;
 
           const filledCount = await autofiller.autofill(data.autofillValues);
