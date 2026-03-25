@@ -280,5 +280,52 @@
       }
       sendResponse({ success: true });
     }
+
+    if (msg.type === 'FIND_AND_CLICK_APPLY') {
+      // Try to find and click the Apply/Easy Apply button on this job posting page
+      const APPLY_SELECTORS = [
+        // LinkedIn Easy Apply
+        '.jobs-apply-button--top-card button',
+        'button.jobs-apply-button',
+        '.jobs-s-apply button',
+        'button[aria-label*="Easy Apply"]',
+        'button[aria-label*="Apply"]',
+        // Generic apply links/buttons
+        'a[href*="/apply"]',
+        '.apply-button',
+        '[data-qa="btn-apply"]',
+        '[data-testid*="apply"]',
+        '[class*="apply-btn"]',
+        '[id*="apply-btn"]',
+      ];
+
+      let clicked = false;
+      for (const sel of APPLY_SELECTORS) {
+        try {
+          const els = document.querySelectorAll(sel);
+          for (const el of els) {
+            const text = (el.textContent || el.getAttribute('aria-label') || '').toLowerCase();
+            if (text.includes('apply') || text.includes('application')) {
+              el.click();
+              clicked = true;
+              break;
+            }
+          }
+        } catch { /* bad selector */ }
+        if (clicked) break;
+      }
+
+      // Fallback: look for any button/link with "apply" in text
+      if (!clicked) {
+        const all = [...document.querySelectorAll('button, a')];
+        const match = all.find(el => {
+          const t = el.textContent.trim().toLowerCase();
+          return (t === 'apply' || t === 'apply now' || t === 'easy apply' || t === 'apply for job') && t.length < 30;
+        });
+        if (match) { match.click(); clicked = true; }
+      }
+
+      sendResponse({ clicked });
+    }
   });
 })();

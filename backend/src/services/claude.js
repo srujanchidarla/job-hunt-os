@@ -46,12 +46,15 @@ export async function analyzeWithClaude(jobText, url, userProfile, tier) {
     : `Focus: ATS analysis (keyword 40% + format 30% + human 30% weighted; penalize AI buzzwords: ${AI_BUZZWORDS.slice(0,6).join(', ')}...) and outreach message.`;
 
   const message = await getClient().messages.create({
-    model: 'claude-sonnet-4-5',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: maxTok,
-    system: `Career coach AI. Analyze job fit for this candidate:
-${userProfile}
-
-Return JSON only, no markdown. ${tierNote}`,
+    system: [
+      {
+        type: 'text',
+        text: `Career coach AI. Analyze job fit for this candidate:\n${userProfile}\n\nReturn JSON only, no markdown. ${tierNote}`,
+        cache_control: { type: 'ephemeral' },
+      },
+    ],
     messages: [{
       role: 'user',
       content: `Job${url ? ` (${url})` : ''}:\n${jobText}\n\nSchema:\n${schema}`,
@@ -79,9 +82,15 @@ JSON only: {"humanizedBullets":["b1","b2","b3"],"humanizedOutreach":"text","newH
 
 export async function humanizeContent({ bullets, outreachMessage, jobDescription }) {
   const message = await getClient().messages.create({
-    model: 'claude-sonnet-4-5',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 1000,
-    system: HUMANIZE_SYSTEM,
+    system: [
+      {
+        type: 'text',
+        text: HUMANIZE_SYSTEM,
+        cache_control: { type: 'ephemeral' },
+      },
+    ],
     messages: [{
       role: 'user',
       content: `JD context:\n${jobDescription.slice(0, 800)}\n\nBullets:\n${bullets.map((b, i) => `${i + 1}. ${b}`).join('\n')}\n\nOutreach:\n${outreachMessage}`,
@@ -98,11 +107,17 @@ export async function humanizeContent({ bullets, outreachMessage, jobDescription
 
 export async function generateSummary({ fitReasoning, topKeywords, role, company }) {
   const message = await getClient().messages.create({
-    model: 'claude-sonnet-4-5',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 300,
     messages: [{
       role: 'user',
-      content: `3-sentence resume summary for ${role} at ${company}. Context: ${fitReasoning}. Skills: ${(topKeywords || []).join(', ')}. First-person implied, active voice, no buzzwords, plain text.`,
+      content: [
+        {
+          type: 'text',
+          text: `3-sentence resume summary for ${role} at ${company}. Context: ${fitReasoning}. Skills: ${(topKeywords || []).join(', ')}. First-person implied, active voice, no buzzwords, plain text.`,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
     }],
   });
   return message.content[0].text.trim();
@@ -110,11 +125,24 @@ export async function generateSummary({ fitReasoning, topKeywords, role, company
 
 export async function parseProfile(rawText) {
   const message = await getClient().messages.create({
-    model: 'claude-sonnet-4-5',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 1500,
+    system: [
+      {
+        type: 'text',
+        text: 'You are a resume parser. Extract and structure resumes into clean plain text for job matching.',
+        cache_control: { type: 'ephemeral' },
+      },
+    ],
     messages: [{
       role: 'user',
-      content: `Extract and structure this resume into clean plain text for job matching. Include: name, contact, all work experience (company/role/dates/bullets with exact metrics), skills, projects, education, GPA, certifications. Preserve every number/percentage exactly.\n\n${rawText.slice(0, 8000)}`,
+      content: [
+        {
+          type: 'text',
+          text: `Extract and structure this resume into clean plain text for job matching. Include: name, contact, all work experience (company/role/dates/bullets with exact metrics), skills, projects, education, GPA, certifications. Preserve every number/percentage exactly.\n\n${rawText.slice(0, 8000)}`,
+          cache_control: { type: 'ephemeral' },
+        },
+      ],
     }],
   });
   return message.content[0].text.trim();

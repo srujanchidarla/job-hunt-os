@@ -119,4 +119,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
     return true;
   }
+
+  if (msg.type === 'UPDATE_NOTION_STATUS') {
+    fetch('http://localhost:3000/api/update-notion-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        notionPageId: msg.notionPageId,
+        status: msg.status || 'Applied',
+        appliedDate: new Date().toISOString().split('T')[0],
+      }),
+    }).catch(err => console.warn('[JobHuntOS BG] Notion status update failed:', err.message));
+    sendResponse({ queued: true });
+    return true;
+  }
 });

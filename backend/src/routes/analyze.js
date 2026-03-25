@@ -326,7 +326,16 @@ Return ONLY a JSON object (no markdown, no explanation):
     const message = await client.messages.create({
       model:      "claude-haiku-4-5-20251001",
       max_tokens: 1200,
-      messages:   [{ role: "user", content: prompt }],
+      messages:   [{
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: prompt,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+      }],
     });
 
     const raw  = message.content[0]?.text?.trim() || '{}';
@@ -344,6 +353,116 @@ Return ONLY a JSON object (no markdown, no explanation):
     return res.json({ autofillValues });
   } catch (err) {
     console.error("generate-autofill error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/answer-questions ───────────────────────────────────────────────
+router.post("/answer-questions", async (req, res) => {
+  const { questions, autofillData, jobAnalysis } = req.body;
+
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return res.status(400).json({ error: "questions array is required" });
+  }
+
+  const { role = '', company = '' } = jobAnalysis || {};
+  const {
+    fullName = '', yearsExp = '', currentTitle = '', degree = '',
+    major = '', workAuth = 'Yes', sponsorship = 'No',
+  } = autofillData || {};
+
+  const questionList = questions.map((q, i) => {
+    let line = `Q${i} [${q.type}${q.required ? ', required' : ''}]: ${q.label}`;
+    if (q.options?.length) line += `\n  Options: ${q.options.join(' | ')}`;
+    return line;
+  }).join('\n\n');
+
+  const systemPrompt = `You are filling out a job application for ${role} at ${company} on behalf of:
+Name: ${fullName}
+Title: ${currentTitle}
+Years of experience: ${yearsExp}
+Education: ${degree}${major ? ' in ' + major : ''}
+Work authorization: ${workAuth}
+Sponsorship needed: ${sponsorship}
+
+Answer every question according to these rules:
+- Yes/No work authorization question → always answer "Yes"
+- Sponsorship/visa required question → always answer "No"
+- Multiple choice → return EXACT option text from the provided options list
+- Open text (about yourself, why this company, etc.) → 2-4 sentences specific to ${company} and the ${role} role
+- Cover letter → 3 paragraphs, 200-250 words total, tailored to ${company}, mention specific metrics and keywords, sound human
+- For fields you cannot answer → return "SKIP"
+
+Return ONLY a JSON object with numeric string keys matching the question index:
+{ "answers": { "0": "answer0", "1": "answer1", ... } }
+No markdown, no explanation.`;
+
+  try {
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const client    = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+    const message = await client.messages.create({
+      model:      "claude-haiku-4-5-20251001",
+      max_tokens: 2000,
+      system: [
+        {
+          type: "text",
+          text: systemPrompt,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{
+        role: "user",
+        content: `Questions to answer:\n\n${questionList}`,
+      }],
+    });
+
+    const raw  = message.content[0]?.text?.trim() || '{}';
+    const json = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+
+    let parsed;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      const match = json.match(/\{[\s\S]*\}/);
+      if (!match) return res.status(500).json({ error: "Claude returned invalid JSON" });
+      parsed = JSON.parse(match[0]);
+    }
+
+    return res.json({ answers: parsed.answers || parsed });
+  } catch (err) {
+    console.error("answer-questions error:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/update-notion-status ───────────────────────────────────────────
+router.post("/update-notion-status", async (req, res) => {
+  const { notionPageId, status, appliedDate } = req.body;
+
+  if (!notionPageId || !status) {
+    return res.status(400).json({ error: "notionPageId and status are required" });
+  }
+
+  try {
+    const notion = new NotionClient({ auth: process.env.NOTION_API_KEY });
+    const dateStr = appliedDate || new Date().toISOString().split('T')[0];
+
+    await notion.pages.update({
+      page_id:    notionPageId,
+      properties: {
+        Status: {
+          select: { name: status },
+        },
+        'Date Applied': {
+          date: { start: dateStr },
+        },
+      },
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("update-notion-status error:", err.message);
     return res.status(500).json({ error: err.message });
   }
 });

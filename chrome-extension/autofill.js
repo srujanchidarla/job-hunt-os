@@ -499,6 +499,18 @@ class JobHuntOSAutofill {
   const count = await autofiller.autofill(autofillValues);
   console.log(`[JobHuntOS] Auto-filled ${count} fields on ${autofiller.platform}`);
 
+  // Notify background to update Notion status
+  try {
+    const storedAnalysis = payload.analysisData;
+    if (storedAnalysis?.notionPageId) {
+      chrome.runtime.sendMessage({
+        type: 'UPDATE_NOTION_STATUS',
+        notionPageId: storedAnalysis.notionPageId,
+        status: 'Applied',
+      });
+    }
+  } catch { /* optional */ }
+
   // Store autofiller on window so undo message handler can reach it
   window._jhosAutofiller = autofiller;
 

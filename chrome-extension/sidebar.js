@@ -553,6 +553,7 @@
     $('resumeSection').classList.add('hidden');
     $('autofillBtn').classList.add('hidden');
     $('autofillSummary').classList.add('hidden');
+    $('applySection').classList.add('hidden');
     $('welcomeSub').textContent = msg || 'Ready to analyze — click Analyze This Job';
     showOnly(welcomeState);
   }
@@ -683,6 +684,8 @@
     setAutofillIdle();
     showAutofillBtn();
     $('autofillSummary').classList.add('hidden');
+    showApplySection();
+    setApplyIdle();
 
     // Show skeletons for tier-2 content
     // ATS: show skeleton, hide real content, put spinner in badge
@@ -1007,6 +1010,88 @@
     });
   }
 
+  // ── Apply section ──
+
+  function showApplySection() {
+    $('applySection').classList.remove('hidden');
+  }
+
+  function setApplyIdle() {
+    const btn = $('applyBtn');
+    btn.disabled = false;
+    btn.className = 'btn-apply';
+    btn.textContent = '🚀 Apply to This Job';
+    $('applyStatus').innerHTML = '';
+  }
+
+  function setApplyLoading(msg) {
+    const btn = $('applyBtn');
+    btn.disabled = true;
+    btn.innerHTML = `<span class="save-spinner"></span> ${msg}`;
+    btn.className = 'btn-apply';
+  }
+
+  function setApplyDone() {
+    const btn = $('applyBtn');
+    btn.disabled = false;
+    btn.className = 'btn-apply btn-apply--done';
+    btn.textContent = '✓ Application ready — switch to form tab';
+  }
+
+  function setApplyError(msg) {
+    const btn = $('applyBtn');
+    btn.disabled = false;
+    btn.className = 'btn-apply btn-apply--error';
+    btn.textContent = '⚠ ' + msg;
+  }
+
+  async function handleApply() {
+    if (!lastAnalysis) return;
+    setApplyLoading('Generating autofill data…');
+
+    try {
+      const profile = userProfile || '';
+
+      // Step 1: store profile + analysis in storage; content script generates
+      // autofill values on the application page itself.
+      await new Promise(resolve =>
+        chrome.storage.local.set({
+          jhos_pending_autofill: {
+            autofillValues: null,   // generated on the application page
+            profileData:    profile,
+            analysisData:   lastAnalysis,
+            triggeredAt:    Date.now(),
+            status:         'pending',
+          }
+        }, resolve)
+      );
+
+      setApplyLoading('Finding Apply button…');
+
+      // Step 2: tell content.js to click the Apply button on the current page
+      const clicked = await new Promise((resolve) => {
+        chrome.tabs.query({}, (tabs) => {
+          const target = tabs
+            .filter(t => t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('chrome://'))
+            .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))[0];
+          if (!target) { resolve(false); return; }
+          chrome.tabs.sendMessage(target.id, { type: 'FIND_AND_CLICK_APPLY' }, (res) => {
+            void chrome.runtime.lastError;
+            resolve(res?.clicked || false);
+          });
+        });
+      });
+
+      setApplyDone();
+      $('applyStatus').innerHTML = clicked
+        ? `<span style="color:var(--green)">✓ Apply button clicked — autofill queued for the form</span>`
+        : `<span style="color:var(--amber)">⚠ Couldn't find Apply button — click it manually. Autofill is ready.</span>`;
+
+    } catch (err) {
+      setApplyError('Failed: ' + err.message);
+    }
+  }
+
   // ── Event listeners ──
 
   $('closeBtn').addEventListener('click', () => {
@@ -1053,6 +1138,10 @@
 
   $('autofillBtn').addEventListener('click', () => {
     if (!$('autofillBtn').disabled) runAutofill();
+  });
+
+  $('applyBtn').addEventListener('click', () => {
+    if (!$('applyBtn').disabled) handleApply();
   });
 
   // ── Messages from content.js ──
