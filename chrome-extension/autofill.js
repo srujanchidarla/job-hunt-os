@@ -69,6 +69,10 @@ class JobHuntOSAutofill {
     if (h.includes('smartrecruiters.com'))                             return 'smartrecruiters';
     if (h.includes('jobvite.com'))                                     return 'jobvite';
     if (h.includes('ashbyhq.com'))                                     return 'ashby';
+    if (h.includes('amazon.jobs') || h.includes('amazoncareers'))      return 'amazon';
+    if (h.includes('bamboohr.com'))                                    return 'bamboohr';
+    if (h.includes('taleo.net'))                                       return 'taleo';
+    if (h.includes('successfactors'))                                  return 'successfactors';
     return 'generic';
   }
 
@@ -120,41 +124,71 @@ class JobHuntOSAutofill {
     return el.name || el.id || '';
   }
 
-  // ── Field scanning (regular + shadow DOM) ─────────────────────────────────
+  // ── Field scanning (regular + shadow DOM + custom dropdowns) ────────────
 
   scanFormFields() {
-    const SELECTOR = [
+    // Native inputs
+    const NATIVE_SEL = [
       'input:not([type="hidden"]):not([type="submit"]):not([type="button"])',
       ':not([type="reset"]):not([type="image"]):not([type="file"]):not([type="password"])',
       ', textarea, select',
     ].join('');
 
+    // Custom dropdown triggers: div/button/span acting as a select
+    const CUSTOM_SEL = [
+      '[role="combobox"]',
+      '[role="listbox"]',
+      '[aria-haspopup="listbox"]',
+      '[aria-haspopup="true"]',
+      // Amazon-specific
+      '[data-test-component="StencilSelect"]',
+      '[class*="select"][class*="trigger"]',
+      '[class*="dropdown"][class*="trigger"]',
+      // Workday
+      '[data-automation-id="formWidget"] [role="combobox"]',
+      // iCIMS / SmartRecruiters divs
+      'button[aria-expanded]',
+    ].join(', ');
+
     const seen   = new Set();
     const fields = [];
 
-    // Collect from regular DOM + all shadow roots
-    const elements = querySelectorAllDeep(SELECTOR);
-
-    for (const el of elements) {
-      if (!this.isSafeField(el)) continue;
-      const key = el.name || el.id || el.getAttribute('data-field') || el.getAttribute('data-id');
+    const addField = (el, isCustom = false) => {
+      if (!this.isSafeField(el)) return;
+      const key = el.name || el.id || el.getAttribute('data-field') || el.getAttribute('data-id') || el.getAttribute('data-test-component');
       if (key) {
-        if (seen.has(key)) continue;
+        if (seen.has(key)) return;
         seen.add(key);
       }
       const label = this.resolveLabel(el);
-      if (!label && !el.name && !el.id) continue;
+      if (!label && !el.name && !el.id) return;
+
+      // Skip if it looks like a nav/menu button unrelated to a form
+      if (isCustom) {
+        const labelLow = label.toLowerCase();
+        const SKIP = ['menu', 'nav', 'search', 'filter', 'sort', 'language', 'theme'];
+        if (SKIP.some(s => labelLow.includes(s)) && labelLow.length < 15) return;
+      }
 
       fields.push({
-        element: el,
+        element:  el,
         label,
-        type:    el.type || el.tagName.toLowerCase(),
-        name:    el.name || el.id || '',
-        options: el.tagName === 'SELECT'
+        type:     isCustom ? 'custom-select' : (el.type || el.tagName.toLowerCase()),
+        name:     el.name || el.id || '',
+        isCustom,
+        options:  el.tagName === 'SELECT'
           ? Array.from(el.options).map(o => o.text).filter(t => t.trim())
           : [],
       });
-    }
+    };
+
+    querySelectorAllDeep(NATIVE_SEL).forEach(el => addField(el, false));
+    querySelectorAllDeep(CUSTOM_SEL).forEach(el => {
+      // Skip if already captured as native
+      if (el.tagName === 'SELECT' || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return;
+      addField(el, true);
+    });
+
     return fields;
   }
 
@@ -259,8 +293,74 @@ class JobHuntOSAutofill {
     }
   }
 
-  fillField(el, value) {
+  // ── Custom dropdown fill (Amazon/Workday/iCIMS) ──────────────────────────
+  // Clicks the trigger → waits for option list → clicks matching option.
+  // Returns a Promise<boolean>.
+
+  async fillCustomSelect(el, value) {
+    const lower = String(value).toLowerCase().trim();
+    if (!lower || lower === 'skip') return false;
+
+    try {
+      // 1. Click trigger to open
+      el.click();
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+      // 2. Wait up to 1.5s for options to appear in DOM
+      const optionEl = await new Promise(resolve => {
+        const deadline = Date.now() + 1500;
+        const poll = () => {
+          // Look for visible option elements
+          const opts = document.querySelectorAll(
+            '[role="option"], [role="menuitem"], [role="menuitemradio"], ' +
+            '[class*="option"]:not([class*="placeholder"]), ' +
+            '[class*="menu-item"], [class*="list-item"]'
+          );
+          const match = Array.from(opts).find(o => {
+            const t = (o.textContent || o.innerText || '').trim().toLowerCase();
+            return t && (t === lower || t.includes(lower) || lower.includes(t));
+          });
+          if (match) { resolve(match); return; }
+          if (Date.now() > deadline) { resolve(null); return; }
+          setTimeout(poll, 100);
+        };
+        poll();
+      });
+
+      if (!optionEl) {
+        // Close the dropdown since we couldn't find an option
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        return false;
+      }
+
+      // 3. Click the matching option
+      optionEl.click();
+      optionEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+
+      // Highlight the trigger element
+      el.style.transition = 'box-shadow 0.3s';
+      el.style.boxShadow  = 'inset 0 0 0 2px rgba(124,106,247,0.7)';
+      setTimeout(() => { el.style.boxShadow = ''; }, 2500);
+
+      return true;
+    } catch (err) {
+      console.warn('[JobHuntOS] fillCustomSelect failed:', err.message);
+      return false;
+    }
+  }
+
+  fillField(el, value, isCustom = false) {
     if (!value || value === 'SKIP' || !this.isSafeField(el)) return false;
+    if (isCustom) {
+      // Async — push to queue and return true optimistically
+      this.fillCustomSelect(el, value).then(ok => {
+        if (ok) {
+          this.filled.push({ element: el, originalValue: '' });
+          el._jhos_filled = true;
+        }
+      });
+      return true;
+    }
     const originalValue = el.value ?? '';
     try {
       const tag  = el.tagName.toLowerCase();
@@ -330,13 +430,29 @@ class JobHuntOSAutofill {
   }
 
   // ── Wait for fields to appear (P3 fix) ───────────────────────────────────
+  // Also checks for custom dropdowns so Amazon/Workday pages don't time out.
 
   waitForFields(timeoutMs = JHOS_MAX_WAIT_MS) {
     return new Promise((resolve) => {
       const deadline = Date.now() + timeoutMs;
+
+      // Broad check: any input/textarea/select OR any combobox/listbox role
+      const hasAnyFields = () => {
+        const native = document.querySelectorAll(
+          'input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="password"]), textarea, select'
+        );
+        const custom = document.querySelectorAll(
+          '[role="combobox"], [role="listbox"], [aria-haspopup="listbox"]'
+        );
+        return native.length > 0 || custom.length > 0;
+      };
+
       const check = () => {
-        const fields = this.scanFormFields();
-        if (fields.length > 0) { resolve(fields); return; }
+        if (hasAnyFields()) {
+          // Small extra delay so React finishes rendering all fields
+          setTimeout(() => resolve(this.scanFormFields()), 300);
+          return;
+        }
         if (Date.now() > deadline) { resolve([]); return; }
         setTimeout(check, JHOS_POLL_MS);
       };
@@ -358,7 +474,7 @@ class JobHuntOSAutofill {
           console.log(`[JobHuntOS] Step change detected — filling ${newFields.length} new fields`);
           for (const field of newFields) {
             const key = this.matchKey(field.label, field.name);
-            if (key && this.cachedValues[key]) this.fillField(field.element, this.cachedValues[key]);
+            if (key && this.cachedValues[key]) this.fillField(field.element, this.cachedValues[key], field.isCustom);
           }
           // Also re-run platform selectors for newly rendered fields
           this._fillPlatformSelectors(this.cachedValues);
@@ -401,11 +517,11 @@ class JobHuntOSAutofill {
     // 1. Platform-specific known selectors
     this._fillPlatformSelectors(aiValues);
 
-    // 2. Generic scan for remaining unfilled fields
+    // 2. Generic scan for remaining unfilled fields (native + custom dropdowns)
     const fields = this.scanFormFields().filter(f => !f.element._jhos_filled);
     for (const field of fields) {
       const key = this.matchKey(field.label, field.name);
-      if (key && aiValues[key]) this.fillField(field.element, aiValues[key]);
+      if (key && aiValues[key]) this.fillField(field.element, aiValues[key], field.isCustom);
     }
 
     // 3. Watch for multi-step form transitions
@@ -435,14 +551,14 @@ class JobHuntOSAutofill {
 // in the sidebar (P1 + P2 fix).
 
 (async function checkPendingAutofill() {
-  // Only run on likely ATS pages (not every page on the internet)
-  const ATS_HOSTS = [
-    'greenhouse.io', 'lever.co', 'linkedin.com', 'workday.com',
-    'myworkdayjobs.com', 'icims.com', 'smartrecruiters.com',
-    'jobvite.com', 'ashbyhq.com', 'indeed.com', 'ziprecruiter.com',
-  ];
-  const isAtsPage = ATS_HOSTS.some(h => window.location.hostname.includes(h));
-  if (!isAtsPage) return;
+  // Skip non-application pages (chrome://, extension pages, search results)
+  const url = window.location.href;
+  const SKIP_PATTERNS = [/^chrome/, /^chrome-extension/, /google\.com\/search/, /^about:/];
+  if (SKIP_PATTERNS.some(p => p.test(url))) return;
+
+  // Must look like an application page — URL or page title signals
+  const isApplicationUrl = /apply|application|jobs?\/|careers?\.|applicant/i.test(url);
+  if (!isApplicationUrl) return;
 
   let payload;
   try {
@@ -451,7 +567,8 @@ class JobHuntOSAutofill {
     );
   } catch { return; }
 
-  if (!payload?.autofillValues || !payload?.triggeredAt) return;
+  // Allow null autofillValues — they get generated on this page
+  if (!payload?.triggeredAt) return;
 
   // Expire after 10 minutes — prevents stale fills on unrelated pages
   if (Date.now() - payload.triggeredAt > 10 * 60 * 1000) {

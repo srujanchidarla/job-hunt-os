@@ -14,11 +14,22 @@ const ATS_PATTERNS = [
   /ashbyhq\.com/,
   /indeed\.com/,
   /ziprecruiter\.com/,
+  /amazon\.jobs/,
+  /amazoncareers/,
+  /bamboohr\.com/,
+  /taleo\.net/,
+  /successfactors/,
+  /careers\./,
 ];
 
+// Also treat any URL with /apply or /application as an ATS page
 function isAtsUrl(url) {
   if (!url) return false;
-  try { return ATS_PATTERNS.some(re => re.test(new URL(url).hostname)); }
+  try {
+    const u = new URL(url);
+    return ATS_PATTERNS.some(re => re.test(u.hostname + u.pathname)) ||
+           /\/apply|\/application|\/applicant/i.test(u.pathname);
+  }
   catch { return false; }
 }
 
