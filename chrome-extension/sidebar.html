@@ -1,456 +1,328 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <meta charset="UTF-8">
   <title>JobHuntOS</title>
-  <link rel="stylesheet" href="sidebar.css"/>
+  <link rel="stylesheet" href="sidebar.css">
 </head>
 <body>
-<div id="app" class="mode-listing">
+<div id="app">
 
-  <!-- ── HEADER (both modes) ── -->
-  <div class="header">
-    <div class="header-logo">
-      <div class="logo-icon">⚡</div>
-      <span class="logo-text">JobHunt<span class="logo-os">OS</span></span>
+  <!-- SETUP SCREEN -->
+  <div id="screen-setup" class="screen" style="display:none">
+    <div class="setup-header">
+      <div class="logo">⚡ JobHuntOS</div>
+      <div class="setup-subtitle">Set up your profile once. Used forever.</div>
     </div>
-    <div class="header-actions">
-      <button class="gear-btn mode-listing-only" id="gearBtn" title="Edit profile">⚙</button>
-      <span class="step-indicator mode-form-only hidden" id="stepIndicator">Step 1</span>
-      <button class="close-btn" id="closeBtn">×</button>
+
+    <div class="setup-tabs">
+      <button class="setup-tab active" data-tab="linkedin">LinkedIn</button>
+      <button class="setup-tab" data-tab="upload">Upload Resume</button>
+      <button class="setup-tab" data-tab="paste">Paste Text</button>
+    </div>
+
+    <div class="setup-content active" id="setup-linkedin">
+      <div class="setup-instruction">
+        Navigate to your LinkedIn profile page, then click:
+      </div>
+      <div class="linkedin-url-preview" id="linkedin-url-preview">
+        Not on a LinkedIn profile yet
+      </div>
+      <button class="btn-primary" id="parse-linkedin-btn" disabled>
+        Parse My LinkedIn Profile
+      </button>
+      <div class="setup-hint">
+        Go to linkedin.com/in/your-username first, then click above
+      </div>
+    </div>
+
+    <div class="setup-content" id="setup-upload">
+      <div class="upload-zone" id="upload-zone">
+        <div class="upload-icon">📄</div>
+        <div class="upload-text">Drop your PDF or DOCX here</div>
+        <div class="upload-subtext">or click to browse</div>
+        <input type="file" id="resume-file" accept=".pdf,.docx" hidden>
+      </div>
+      <div id="upload-status"></div>
+    </div>
+
+    <div class="setup-content" id="setup-paste">
+      <textarea
+        id="paste-resume-text"
+        placeholder="Paste your resume text here..."
+        rows="10"
+      ></textarea>
+      <button class="btn-primary" id="parse-paste-btn">
+        Parse Resume Text
+      </button>
+    </div>
+
+    <div id="setup-parsing" style="display:none">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Parsing your profile with AI...</div>
+    </div>
+
+    <div id="setup-preview" style="display:none">
+      <div class="preview-header">✓ Profile extracted</div>
+      <div id="preview-fields"></div>
+      <button class="btn-primary" id="save-profile-btn">
+        Save Profile &amp; Start
+      </button>
+      <button class="btn-ghost" id="edit-raw-btn">Edit Raw</button>
     </div>
   </div>
 
-  <!-- ── URL BAR (listing mode only) ── -->
-  <div class="url-bar mode-listing-only" id="urlBar">
-    <span class="url-text" id="urlText">—</span>
-    <span class="url-badge hidden" id="urlBadge">New job!</span>
-  </div>
+  <!-- LISTING MODE -->
+  <div id="screen-listing" class="screen" style="display:none">
 
-  <!-- ── TAB BAR ── -->
-  <div class="tab-bar" id="tabBar">
-    <!-- Listing mode tabs -->
-    <button class="tab mode-listing-only active" data-tab="analyze">🎯 Analyze</button>
-    <button class="tab mode-listing-only" data-tab="ats">📊 ATS</button>
-    <button class="tab mode-listing-only" data-tab="profile">👤 Profile</button>
-    <!-- Form mode tabs -->
-    <button class="tab mode-form-only hidden active" data-tab="autofill">⚡ Autofill</button>
-    <button class="tab mode-form-only hidden" data-tab="keywords">📊 Keywords</button>
-    <button class="tab mode-form-only hidden" data-tab="profile-form">👤 Profile</button>
-  </div>
-
-  <!-- ════════════════════════════════════════ -->
-  <!-- LISTING MODE PANELS -->
-  <!-- ════════════════════════════════════════ -->
-
-  <!-- ── Listing: Analyze tab ── -->
-  <div class="tab-panel mode-listing-only" id="panel-analyze">
-
-    <!-- Welcome / pre-analysis state -->
-    <div class="scroll-area" id="welcomeState">
-      <div class="welcome-inner">
-        <div class="welcome-logo-wrap">
-          <div class="welcome-logo-icon">⚡</div>
-        </div>
-        <p class="welcome-title">JobHunt<span class="logo-os">OS</span></p>
-        <p class="welcome-sub" id="welcomeSub">Navigate to a job posting, then click Analyze</p>
-        <button class="btn-analyze" id="analyzeBtn">🎯 Analyze This Job</button>
+    <div class="header">
+      <div class="logo">⚡ JobHuntOS</div>
+      <div class="header-actions">
+        <button class="btn-icon" id="profile-settings-btn" title="Profile">👤</button>
+        <button class="btn-icon" id="close-sidebar-btn">×</button>
       </div>
     </div>
 
-    <!-- Loading state -->
-    <div class="scroll-area hidden" id="loadingState">
-      <div class="loading-inner">
-        <div class="spinner-ring"></div>
-        <p class="loading-title">Analyzing job posting</p>
-        <p class="loading-sub" id="loadingText">Claude is reading the JD…</p>
-      </div>
+    <div class="tabs">
+      <button class="tab active" data-tab="analyze">🎯 Analyze</button>
+      <button class="tab" data-tab="ats">📊 ATS</button>
+      <button class="tab" data-tab="recruiters">👥 Recruiters</button>
+      <button class="tab" data-tab="profile">👤 Profile</button>
     </div>
 
-    <!-- Error state -->
-    <div class="scroll-area hidden" id="errorState">
-      <div class="error-inner">
-        <div class="error-icon">⚠️</div>
-        <p class="error-title">Analysis failed</p>
-        <p class="error-msg" id="errorMsg">Something went wrong.</p>
-        <button class="btn-retry" id="retryBtn">Try Again</button>
-      </div>
-    </div>
-
-    <!-- Result state -->
-    <div class="scroll-area hidden" id="resultState">
-
-      <!-- Job hero -->
-      <div class="job-hero">
-        <div class="job-info">
-          <div class="job-role" id="jobRole">—</div>
-          <div class="job-company" id="jobCompany">—</div>
+    <div class="tab-content active" id="tab-analyze">
+      <div id="pre-analysis">
+        <div class="job-detect-card">
+          <div class="job-detect-title" id="detected-job-title">Detecting job...</div>
+          <div class="job-detect-company" id="detected-job-company"></div>
         </div>
-        <div class="score-circle" id="scoreCircle">
-          <svg class="score-ring" viewBox="0 0 64 64">
-            <circle class="ring-bg" cx="32" cy="32" r="26"/>
-            <circle class="ring-fill" id="ringFill" cx="32" cy="32" r="26" stroke-dasharray="163.4" stroke-dashoffset="163.4"/>
-          </svg>
-          <span class="score-num" id="scoreNum">—</span>
-        </div>
-      </div>
-
-      <!-- Fit reasoning -->
-      <div class="reasoning-box" id="fitReasoning"></div>
-
-      <!-- Resume Bullets -->
-      <div class="section">
-        <div class="section-header">
-          <span class="section-title">Tailored Resume Bullets</span>
-          <span class="section-badge" id="bulletsBadge">3</span>
-        </div>
-        <ul class="bullets-list" id="bulletsList"></ul>
-      </div>
-
-      <!-- Outreach Message -->
-      <div class="section">
-        <div class="section-header">
-          <span class="section-title">Outreach Message</span>
-          <button class="btn-copy-all hidden" id="copyOutreachBtn">📋 Copy</button>
-        </div>
-        <div class="tier2-skeleton" id="outreachSkeleton">
-          <div class="skeleton-line skeleton-line--long"></div>
-          <div class="skeleton-line skeleton-line--long"></div>
-          <div class="skeleton-line skeleton-line--medium"></div>
-        </div>
-        <div class="outreach-card hidden" id="outreachText"></div>
-      </div>
-
-      <!-- ATS Analysis (inline in Analyze tab) -->
-      <div class="section ats-section" id="atsSection">
-        <div class="ats-toggle" id="atsToggle">
-          <div class="section-header" style="margin-bottom:0">
-            <span class="section-title">ATS Analysis</span>
-            <div class="ats-header-right">
-              <span class="ats-overall-badge" id="atsOverallBadge">
-                <span class="tier2-badge-spinner" id="atsBadgeSpinner"></span>
-              </span>
-              <svg class="ats-chevron" id="atsChevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
-            </div>
-          </div>
-        </div>
-        <div class="ats-body" id="atsBody">
-          <div id="atsSkeleton">
-            <div class="skeleton-rings-row">
-              <div class="skeleton-ring-wrap"><div class="skeleton-circle"></div><div class="skeleton-line skeleton-line--short"></div></div>
-              <div class="skeleton-ring-wrap"><div class="skeleton-circle"></div><div class="skeleton-line skeleton-line--short"></div></div>
-              <div class="skeleton-ring-wrap"><div class="skeleton-circle"></div><div class="skeleton-line skeleton-line--short"></div></div>
-            </div>
-            <div class="skeleton-line skeleton-line--long"></div>
-            <div class="skeleton-line skeleton-line--medium"></div>
-          </div>
-          <div id="atsRealContent" class="hidden">
-            <div class="ats-scores-row">
-              <div class="ats-mini-score">
-                <div class="ats-ring-wrap">
-                  <svg class="ats-ring" viewBox="0 0 40 40">
-                    <circle class="ats-ring-bg" cx="20" cy="20" r="15"/>
-                    <circle class="ats-ring-fill" id="atsKeywordRing" cx="20" cy="20" r="15" stroke-dasharray="94.2" stroke-dashoffset="94.2" stroke="#7c6af7"/>
-                  </svg>
-                  <span class="ats-ring-num" id="atsKeywordNum">—</span>
-                </div>
-                <span class="ats-ring-label">Keywords</span>
-              </div>
-              <div class="ats-mini-score">
-                <div class="ats-ring-wrap">
-                  <svg class="ats-ring" viewBox="0 0 40 40">
-                    <circle class="ats-ring-bg" cx="20" cy="20" r="15"/>
-                    <circle class="ats-ring-fill" id="atsFormatRing" cx="20" cy="20" r="15" stroke-dasharray="94.2" stroke-dashoffset="94.2" stroke="#7c6af7"/>
-                  </svg>
-                  <span class="ats-ring-num" id="atsFormatNum">—</span>
-                </div>
-                <span class="ats-ring-label">Format</span>
-              </div>
-              <div class="ats-mini-score">
-                <div class="ats-ring-wrap">
-                  <svg class="ats-ring" viewBox="0 0 40 40">
-                    <circle class="ats-ring-bg" cx="20" cy="20" r="15"/>
-                    <circle class="ats-ring-fill" id="atsHumanRing" cx="20" cy="20" r="15" stroke-dasharray="94.2" stroke-dashoffset="94.2" stroke="#7c6af7"/>
-                  </svg>
-                  <span class="ats-ring-num" id="atsHumanNum">—</span>
-                </div>
-                <span class="ats-ring-label">Human</span>
-              </div>
-            </div>
-            <div class="ats-subsection">
-              <span class="ats-sub-label">Keywords Found</span>
-              <div class="tags-wrap" id="atsKeywordsFound"></div>
-            </div>
-            <div class="ats-subsection">
-              <span class="ats-sub-label">Keywords Missing</span>
-              <div class="tags-wrap" id="atsKeywordsMissing"></div>
-            </div>
-            <div class="ats-subsection">
-              <span class="ats-sub-label">Suggestions</span>
-              <ul class="ats-suggestions" id="atsSuggestions"></ul>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Skills Gap -->
-      <div class="section">
-        <div class="section-header"><span class="section-title">Skills Gap</span></div>
-        <div class="tags-wrap" id="skillsGapTags"></div>
-      </div>
-
-      <!-- Top Keywords -->
-      <div class="section">
-        <div class="section-header"><span class="section-title">Top Keywords</span></div>
-        <div class="tags-wrap" id="keywordTags"></div>
-      </div>
-
-      <!-- Time saved -->
-      <div class="time-saved-bar" id="timeSavedBar">
-        <span>⚡</span>
-        <span id="timeSavedText">Loading...</span>
-      </div>
-
-      <!-- Actions -->
-      <div class="action-row">
-        <button class="btn-humanize" id="humanizeBtn">
-          <span id="humanizeBtnInner">✦ Humanize My Bullets</span>
+        <button class="btn-primary btn-large" id="analyze-btn">
+          🎯 Analyze This Job
         </button>
-        <button class="btn-save" id="saveBtn">
-          <span class="save-btn-inner" id="saveBtnInner">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
-            </svg>
-            Save to Notion
-          </span>
-        </button>
+        <div class="hint-text">
+          Get fit score, ATS check, tailored bullets, and more
+        </div>
+      </div>
 
-        <!-- Generate Resume (shown after saving) -->
-        <div class="resume-section hidden" id="resumeSection">
-          <button class="btn-resume" id="resumeBtn">
-            <span id="resumeBtnInner">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>
-              </svg>
-              Generate Tailored Resume
-            </span>
-          </button>
-          <div class="resume-result hidden" id="resumeResult">
-            <p class="resume-note" id="resumeNote"></p>
-            <div class="resume-actions">
-              <a class="btn-resume-notion" id="resumeNotionLink" href="#" target="_blank" rel="noopener">📄 View in Notion</a>
-              <button class="btn-resume-download" id="resumeDownloadBtn">⬇ Download</button>
-            </div>
+      <div id="analyzing-state" style="display:none">
+        <div class="loading-spinner"></div>
+        <div class="loading-text" id="analyze-loading-text">Analyzing job posting...</div>
+      </div>
+
+      <div id="analysis-results" style="display:none">
+        <div class="score-card">
+          <div class="score-circle" id="fit-score-circle">
+            <span class="score-num" id="fit-score-num">--</span>
+          </div>
+          <div class="score-info">
+            <div class="score-role" id="result-role"></div>
+            <div class="score-company" id="result-company"></div>
+            <div class="score-reason" id="result-reason"></div>
           </div>
         </div>
 
-        <!-- Autofill button -->
-        <button class="btn-autofill hidden" id="autofillBtn">⚡ Autofill Application</button>
-        <div class="autofill-summary hidden" id="autofillSummary"></div>
-
-        <!-- Apply button -->
-        <div class="apply-section hidden" id="applySection">
-          <div class="apply-divider"></div>
-          <button id="applyBtn" class="btn-apply">🚀 Apply to This Job</button>
-          <div id="applyStatus"></div>
+        <div class="mini-scores">
+          <div class="mini-score">
+            <div class="mini-label">Keywords</div>
+            <div class="mini-val" id="mini-kw">--</div>
+          </div>
+          <div class="mini-score">
+            <div class="mini-label">Format</div>
+            <div class="mini-val" id="mini-fmt">--</div>
+          </div>
+          <div class="mini-score">
+            <div class="mini-label">Human</div>
+            <div class="mini-val" id="mini-hum">--</div>
+          </div>
         </div>
 
-        <button class="btn-reanalyze" id="reanalyzeBtn">↻ Re-analyze</button>
-        <button class="btn-new-job" id="newJobBtn">⊕ Analyze New Job</button>
+        <div class="section">
+          <div class="section-title">Tailored Resume Bullets</div>
+          <div id="bullets-container"></div>
+          <button class="btn-secondary" id="humanize-btn">✦ Humanize Bullets</button>
+        </div>
+
+        <div class="section collapsible">
+          <div class="section-header" onclick="toggleSection(this)">
+            Outreach Message <span class="toggle">▼</span>
+          </div>
+          <div class="section-body">
+            <div id="outreach-text" class="outreach-content"></div>
+            <button class="btn-copy-sm" id="copy-outreach-btn">Copy All</button>
+          </div>
+        </div>
+
+        <div class="action-row">
+          <button class="btn-notion" id="save-notion-btn">💾 Save to Notion</button>
+          <button class="btn-apply" id="apply-btn">🚀 Apply Now</button>
+        </div>
+
+        <div class="secondary-row">
+          <button class="btn-ghost-sm" id="reanalyze-btn">↻ Re-analyze</button>
+          <button class="btn-ghost-sm" id="new-job-btn">⊕ New Job</button>
+          <button class="btn-ghost-sm" id="gen-resume-btn">📄 Resume</button>
+        </div>
       </div>
-      <div style="height:16px"></div>
+    </div>
+
+    <div class="tab-content" id="tab-ats">
+      <div id="ats-empty">Analyze a job first to see ATS breakdown</div>
+      <div id="ats-content" style="display:none">
+        <div class="ats-overall">
+          <div class="ats-score-big" id="ats-overall-score">--</div>
+          <div class="ats-score-label">Overall ATS Score</div>
+        </div>
+        <div class="kw-sections">
+          <div class="kw-found">
+            <div class="kw-title">✓ Keywords found</div>
+            <div id="kw-found-list"></div>
+          </div>
+          <div class="kw-missing">
+            <div class="kw-title">✗ Missing keywords</div>
+            <div id="kw-missing-list"></div>
+          </div>
+        </div>
+        <div class="suggestions-list" id="ats-suggestions"></div>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-recruiters">
+      <div id="recruiters-pre">
+        <div class="recruiter-cta">
+          <div class="cta-icon">👥</div>
+          <div class="cta-title">Find Recruiters</div>
+          <div class="cta-text" id="recruiter-company-hint">
+            Analyze a job first, then find recruiters at that company.
+          </div>
+        </div>
+        <button class="btn-primary" id="find-recruiters-btn">👥 Find Recruiters</button>
+      </div>
+      <div id="recruiters-loading" style="display:none">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Searching Apollo database...</div>
+      </div>
+      <div id="recruiters-results" style="display:none"></div>
+    </div>
+
+    <div class="tab-content" id="tab-profile">
+      <div class="profile-hint">📋 Click any field to copy</div>
+      <div id="profile-display"></div>
+      <button class="btn-secondary" id="update-profile-btn">✏ Update Profile</button>
     </div>
 
   </div>
 
-  <!-- ── Listing: ATS tab ── -->
-  <div class="tab-panel mode-listing-only hidden" id="panel-ats">
-    <div class="scroll-area">
-      <div id="atsTabContent">
-        <div class="placeholder-inner" id="atsTabPlaceholder">
-          <div class="placeholder-icon">📊</div>
-          <p>Analyze a job first to see ATS breakdown</p>
-        </div>
-        <div class="ats-full-panel hidden" id="atsTabFull"></div>
+  <!-- FORM/AUTOFILL MODE -->
+  <div id="screen-form" class="screen" style="display:none">
+
+    <div class="header">
+      <div class="logo">⚡ JobHuntOS</div>
+      <div class="header-actions">
+        <div class="step-badge" id="step-badge">Step 1</div>
+        <button class="btn-icon" id="close-form-btn">×</button>
       </div>
     </div>
-  </div>
 
-  <!-- ── Listing: Profile tab ── -->
-  <div class="tab-panel mode-listing-only hidden" id="panel-profile">
-    <div class="scroll-area">
-      <div class="profile-hint">📋 Click any field to copy it</div>
-      <div id="profileContent"></div>
-      <div style="padding:0 14px 14px">
-        <button class="btn-ghost" id="editProfileBtn">✏ Edit Profile</button>
+    <div class="tabs">
+      <button class="tab active" data-tab="autofill-tab">⚡ Autofill</button>
+      <button class="tab" data-tab="keywords-tab">📊 Keywords</button>
+      <button class="tab" data-tab="profile-tab">👤 Profile</button>
+    </div>
+
+    <div class="tab-content active" id="tab-autofill-tab">
+      <div class="job-context-card">
+        <div class="jc-info">
+          <div class="jc-role" id="form-job-role">Loading job info...</div>
+          <div class="jc-company" id="form-job-company"></div>
+        </div>
+        <div class="jc-score" id="form-fit-badge"></div>
+      </div>
+
+      <button class="btn-autofill-main" id="autofill-page-btn">
+        ⚡ Autofill This Page
+      </button>
+
+      <div class="analyze-nudge" id="analyze-nudge" style="display:none">
+        <div>⚠️ No job analysis yet</div>
+        <div class="nudge-text">
+          Autofill will use your basic profile data.
+          For better results, analyze the job posting first.
+        </div>
+      </div>
+
+      <div class="questions-section">
+        <div class="q-header">
+          Questions on this page
+          <span id="q-count-badge">Scanning...</span>
+        </div>
+        <div id="questions-list"></div>
+      </div>
+
+      <div class="section collapsible" id="cover-section">
+        <div class="section-header" onclick="toggleSection(this)">
+          Cover Letter <span id="cover-status">Not detected</span>
+          <span class="toggle">▼</span>
+        </div>
+        <div class="section-body">
+          <div id="cover-letter-text" class="cover-text"></div>
+          <div class="cover-actions">
+            <button class="btn-secondary-sm" id="gen-cover-btn">Generate</button>
+            <button class="btn-copy-sm" id="copy-cover-btn">Copy</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-bottom-bar">
+        <div class="undo-row" id="undo-row" style="display:none">
+          <span id="filled-count">0 fields filled</span>
+          <button class="btn-ghost-sm" id="undo-fill-btn">↩ Undo</button>
+        </div>
+        <button class="btn-next-page" id="next-page-btn">Next Page →</button>
       </div>
     </div>
-  </div>
 
-  <!-- ════════════════════════════════════════ -->
-  <!-- FORM MODE PANELS -->
-  <!-- ════════════════════════════════════════ -->
-
-  <!-- ── Form: Autofill tab ── -->
-  <div class="tab-panel mode-form-only hidden" id="panel-autofill">
-    <div class="scroll-area">
-
-      <!-- Job context card -->
-      <div class="form-job-card" id="formJobCard">
-        <div class="form-job-info">
-          <div class="form-job-title" id="formJobTitle">Detecting job…</div>
-          <div class="form-job-company" id="formJobCompany"></div>
-        </div>
-        <div class="form-fit-badge hidden" id="formFitBadge"></div>
-      </div>
-
-      <!-- Main autofill CTA -->
-      <div class="autofill-cta">
-        <button class="btn-autofill-main" id="autofillPageBtn">⚡ Autofill This Page</button>
-        <div class="autofill-sub">Fills all questions with AI-powered answers</div>
-      </div>
-
-      <!-- Analyze first prompt -->
-      <div class="analyze-prompt-card hidden" id="analyzePromptCard">
-        <div class="prompt-icon">🎯</div>
-        <div class="prompt-text">Analyze this job first for better autofill quality</div>
-        <button class="btn-sm-secondary" id="quickAnalyzeBtn">Analyze Job →</button>
-      </div>
-
-      <!-- Undo bar (shown after filling) -->
-      <div class="undo-bar hidden" id="undoBar">
-        <span id="filledCountText">0 fields filled ✓</span>
-        <div style="display:flex;gap:8px">
-          <span class="undo-warning">⚠ Review before submitting</span>
-          <button class="btn-undo" id="undoBtn">↩ Undo</button>
-        </div>
-      </div>
-
-      <!-- Questions section -->
-      <div class="section">
-        <div class="section-header">
-          <span class="section-title">Questions on this page</span>
-          <span class="section-badge" id="qCount">Scanning…</span>
-        </div>
-        <div id="questionsList"></div>
-      </div>
-
-      <!-- Cover letter section -->
-      <div class="section">
-        <div class="section-header">
-          <span class="section-title">Cover Letter</span>
-          <span class="cl-status" id="clStatus">Not detected</span>
-        </div>
-        <div id="coverLetterPreview" class="cover-letter-preview hidden"></div>
-        <div class="cl-actions">
-          <button class="btn-sm-secondary" id="genCoverBtn">Generate Cover Letter</button>
-          <button class="btn-sm-copy hidden" id="copyCoverBtn">Copy</button>
-        </div>
-      </div>
-
-      <!-- Time saved -->
-      <div class="time-saved-bar" id="timeSavedBarForm">
-        <span>⚡</span>
-        <span id="timeSavedTextForm">Loading...</span>
-      </div>
-
-    </div>
-  </div>
-
-  <!-- ── Form: Keywords tab ── -->
-  <div class="tab-panel mode-form-only hidden" id="panel-keywords">
-    <div class="scroll-area">
-      <div class="kw-header">
-        <div class="kw-match-status" id="kwMatchStatus">Keyword Match</div>
-      </div>
-      <div class="kw-gauge-wrap">
-        <div class="kw-gauge-circle" id="kwGauge">
-          <svg viewBox="0 0 80 80" class="kw-gauge-svg">
-            <circle class="kw-gauge-bg" cx="40" cy="40" r="34"/>
-            <circle class="kw-gauge-fill" id="kwGaugeFill" cx="40" cy="40" r="34" stroke-dasharray="213.6" stroke-dashoffset="213.6"/>
+    <div class="tab-content" id="tab-keywords-tab">
+      <div id="kw-match-header" class="kw-match-header">
+        <div class="kw-match-title" id="kw-match-status">Keyword Match</div>
+        <div class="kw-gauge-wrap">
+          <svg viewBox="0 0 120 60" class="kw-gauge">
+            <path d="M10 55 A 50 50 0 0 1 110 55" fill="none"
+              stroke="#2a2a3a" stroke-width="10" stroke-linecap="round"/>
+            <path id="kw-gauge-fill" d="M10 55 A 50 50 0 0 1 110 55"
+              fill="none" stroke="#6366f1" stroke-width="10"
+              stroke-linecap="round" stroke-dasharray="157"
+              stroke-dashoffset="157"/>
           </svg>
-          <div class="kw-gauge-text">
-            <span class="kw-gauge-pct" id="kwGaugePct">—</span>
-            <span class="kw-gauge-label" id="kwGaugeLabel">Match</span>
-          </div>
+          <div class="kw-gauge-text" id="kw-gauge-pct">--%</div>
         </div>
       </div>
       <div class="kw-grid">
-        <div class="kw-col">
-          <div class="kw-col-title kw-found-title">✓ Found in resume</div>
-          <div id="kwFoundList" class="kw-list"></div>
+        <div class="kw-col found">
+          <div class="kw-col-title">✓ Found</div>
+          <div id="form-kw-found"></div>
         </div>
-        <div class="kw-col">
-          <div class="kw-col-title kw-missing-title">✗ Missing keywords</div>
-          <div id="kwMissingList" class="kw-list"></div>
+        <div class="kw-col missing">
+          <div class="kw-col-title">✗ Missing</div>
+          <div id="form-kw-missing"></div>
         </div>
-      </div>
-      <div style="padding:0 14px 14px">
-        <button class="btn-primary" id="tailorResumeBtn">Tailor Resume in Notion</button>
       </div>
     </div>
+
+    <div class="tab-content" id="tab-profile-tab">
+      <div class="profile-hint">📋 Click any field to copy it!</div>
+      <div id="form-profile-display"></div>
+    </div>
+
   </div>
 
-  <!-- ── Form: Profile tab ── -->
-  <div class="tab-panel mode-form-only hidden" id="panel-profile-form">
-    <div class="scroll-area">
-      <div class="profile-hint">📋 Click any field to copy it</div>
-      <div id="profileFormContent"></div>
-      <div style="padding:0 14px 14px">
-        <button class="btn-ghost" id="editProfileFormBtn">✏ Edit Profile</button>
-      </div>
+  <!-- UNKNOWN MODE -->
+  <div id="screen-unknown" class="screen" style="display:none">
+    <div class="logo-center">⚡ JobHuntOS</div>
+    <div class="unknown-text">
+      Navigate to a job posting to analyze it,
+      or to an application form to autofill it.
     </div>
-  </div>
-
-  <!-- ════════════════════════════════════════ -->
-  <!-- SETUP OVERLAY (both modes) -->
-  <!-- ════════════════════════════════════════ -->
-  <div id="setupOverlay" class="setup-overlay hidden">
-    <div class="setup-body">
-      <div class="setup-intro">
-        <p class="setup-title">Set Up Your Profile</p>
-        <p class="setup-sub">Upload your resume so Claude can tailor job analysis to you.</p>
-      </div>
-      <div class="setup-tab-bar">
-        <button class="setup-tab-btn active" data-tab="upload">Upload File</button>
-        <button class="setup-tab-btn" data-tab="paste">Paste Resume</button>
-        <button class="setup-tab-btn" data-tab="linkedin">LinkedIn</button>
-      </div>
-      <!-- Upload tab -->
-      <div class="setup-tab-panel" id="stab-upload">
-        <div class="setup-dropzone" id="setupDropzone">
-          <div class="setup-dropzone-icon">📄</div>
-          <p class="setup-dropzone-title">Drop your resume here</p>
-          <p class="setup-dropzone-sub">PDF or DOCX — max 5MB</p>
-          <button class="setup-btn-browse" id="setupBrowseBtn">Browse Files</button>
-          <input type="file" id="setupFileInput" accept=".pdf,.docx" hidden/>
-        </div>
-        <div class="setup-file-selected hidden" id="setupFileSelected">
-          <span>📎</span>
-          <span class="setup-file-name" id="setupFileName">—</span>
-          <button class="setup-btn-clear" id="setupClearFileBtn">✕</button>
-        </div>
-      </div>
-      <!-- LinkedIn tab -->
-      <div class="setup-tab-panel hidden" id="stab-linkedin">
-        <div class="setup-linkedin-info">
-          <div class="setup-linkedin-icon">in</div>
-          <p class="setup-linkedin-title">Use your LinkedIn profile</p>
-          <p class="setup-linkedin-desc">Navigate to your LinkedIn profile page, then click the button below.</p>
-        </div>
-        <button class="setup-btn-linkedin" id="setupLinkedInBtn">Extract from Current LinkedIn Page</button>
-        <p class="setup-linkedin-hint" id="setupLinkedInHint">Make sure you're on your own LinkedIn profile (linkedin.com/in/yourname)</p>
-      </div>
-      <!-- Paste tab -->
-      <div class="setup-tab-panel hidden" id="stab-paste">
-        <textarea id="setupPasteArea" class="setup-paste-area" placeholder="Paste your resume text here…" rows="8"></textarea>
-        <p class="setup-char-count" id="setupCharCount">0 characters</p>
-      </div>
-      <div class="setup-status hidden" id="setupStatus"><span id="setupStatusMsg"></span></div>
-      <button class="setup-btn-save" id="setupSaveBtn"><span id="setupSaveBtnInner">Save Profile &amp; Continue →</span></button>
-      <button class="setup-btn-skip hidden" id="setupSkipBtn">← Back to analyzer</button>
-    </div>
+    <button class="btn-ghost" id="go-linkedin-btn">Go to LinkedIn Jobs →</button>
   </div>
 
 </div>

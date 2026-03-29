@@ -1,1773 +1,1014 @@
-(() => {
-  const BACKEND               = 'http://localhost:3000/api';
-  const BACKEND_ANALYZE_STREAM = BACKEND + '/analyze-stream';
-  const BACKEND_SAVE           = BACKEND + '/save';
-  const BACKEND_HUMANIZE       = BACKEND + '/humanize';
-  const BACKEND_GENERATE_RESUME = BACKEND + '/generate-resume';
-  const JHOS_STORAGE_KEY       = 'jhos_pending_autofill';
+// sidebar.js — chrome.storage as single source of truth
 
-  const AI_BUZZWORDS = ['leverage', 'utilize', 'synergy', 'spearheaded', 'orchestrated',
-    'deliverables', 'robust', 'innovative', 'cutting-edge', 'empower', 'transformative',
-    'holistic', 'paradigm', 'ecosystem', 'streamline'];
+const BACKEND = 'http://localhost:3000'
 
-  const $ = (id) => document.getElementById(id);
+// ── INIT ──
+async function init() {
+  const { userProfile, appState } = await chrome.storage.local.get(['userProfile', 'appState'])
 
-  // ── Global state ──
-  let userProfile     = null;
-  let lastAnalysis    = null;
-  let savedUrl        = null;
-  let savedPageId     = null;
-  let pagePayload     = null;
-  let currentUrl      = null;
-  let hasAnalyzed     = false;
-  let autoReanalyze   = false;
-  let atsCollapsed    = false;
-  let autofillActive  = false;
-  let currentMode     = 'listing';
-  let scannedQuestions = [];
-  let timeSavedMinutes = 0;
+  if (!userProfile?.setupComplete) {
+    showScreen('setup')
+    initSetupScreen()
+    return
+  }
 
-  // ── Mode switching ──
+  const mode = appState?.currentMode || 'unknown'
 
-  function setMode(mode) {
-    if (currentMode === mode) return;
-    currentMode = mode;
-    const app = document.getElementById('app');
-    app.classList.remove('mode-listing', 'mode-form');
-    app.classList.add('mode-' + mode);
+  if (mode === 'listing') {
+    showScreen('listing')
+    await initListingMode(appState, userProfile)
+  } else if (mode === 'form') {
+    showScreen('form')
+    await initFormMode(appState, userProfile)
+  } else {
+    showScreen('unknown')
+    initUnknownScreen()
+  }
+}
 
-    if (mode === 'listing') {
-      activateTab('analyze');
-    } else {
-      activateTab('autofill');
-      setTimeout(() => requestQuestionScan(), 800);
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.style.display = 'none')
+  const screen = document.getElementById('screen-' + name)
+  if (screen) screen.style.display = 'flex'
+}
+
+// ── MESSAGE LISTENER ──
+window.addEventListener('message', async (event) => {
+  const msg = event.data
+  if (!msg || !msg.type) return
+
+  if (msg.type === 'URL_CHANGED') {
+    const { appState = {} } = await chrome.storage.local.get('appState')
+    await chrome.storage.local.set({
+      appState: { ...appState, currentMode: msg.mode, currentUrl: msg.url }
+    })
+
+    if (msg.mode === 'listing' && msg.jobInfo) {
+      const titleEl = document.getElementById('detected-job-title')
+      const companyEl = document.getElementById('detected-job-company')
+      if (titleEl) titleEl.textContent = msg.jobInfo.title || 'Job detected'
+      if (companyEl) companyEl.textContent = msg.jobInfo.company || ''
+
+      const { appState: state } = await chrome.storage.local.get('appState')
+      if (state?.currentAnalysis?.sourceUrl !== msg.url) {
+        const preEl = document.getElementById('pre-analysis')
+        const resEl = document.getElementById('analysis-results')
+        if (preEl) preEl.style.display = 'block'
+        if (resEl) resEl.style.display = 'none'
+      }
+    }
+
+    const currentScreenMode = document.body.dataset.currentMode
+    if (msg.mode !== currentScreenMode) {
+      document.body.dataset.currentMode = msg.mode
+      const { appState: newState } = await chrome.storage.local.get('appState')
+      const { userProfile } = await chrome.storage.local.get('userProfile')
+      if (msg.mode === 'listing') {
+        showScreen('listing')
+        await initListingMode(newState, userProfile)
+      } else if (msg.mode === 'form') {
+        showScreen('form')
+        await initFormMode(newState, userProfile)
+      }
     }
   }
 
-  // ── Tab switching ──
-
-  function activateTab(tabId) {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
-
-    const tabEl = document.querySelector(`.tab[data-tab="${tabId}"]`);
-    if (tabEl) tabEl.classList.add('active');
-
-    const panelId = tabId === 'profile'      ? 'panel-profile'      :
-                    tabId === 'profile-form'  ? 'panel-profile-form' :
-                    'panel-' + tabId;
-    const panel = $(panelId);
-    if (panel) panel.classList.remove('hidden');
-
-    // When switching to profile tabs, render profile
-    if (tabId === 'profile') renderProfileTab('profileContent');
-    if (tabId === 'profile-form') renderProfileTab('profileFormContent');
-
-    // When switching to keywords tab in form mode, populate if we have analysis
-    if (tabId === 'keywords' && lastAnalysis) renderKeywordsTab(lastAnalysis);
+  if (msg.type === 'PAGE_DATA') {
+    if (msg.jobInfo?.title) setText('detected-job-title', msg.jobInfo.title)
+    if (msg.jobInfo?.company) setText('detected-job-company', msg.jobInfo.company)
   }
 
+  if (msg.type === 'PROFILE_UPDATED') {
+    renderProfileDisplay(msg.profile)
+    renderProfileDisplay(msg.profile, 'form-profile-display')
+  }
+
+  if (msg.type === 'LINKEDIN_PROFILE_STATUS') {
+    const btn = document.getElementById('parse-linkedin-btn')
+    const preview = document.getElementById('linkedin-url-preview')
+    if (msg.isLinkedIn) {
+      if (btn) btn.disabled = false
+      if (preview) preview.textContent = msg.url
+    } else {
+      if (btn) btn.disabled = true
+      if (preview) preview.textContent = 'Not on a LinkedIn profile yet'
+    }
+  }
+
+  if (msg.type === 'LINKEDIN_PARSED') {
+    showProfilePreview(msg.profile, 'linkedin')
+  }
+
+  if (msg.type === 'LINKEDIN_PARSE_ERROR') {
+    showToast('LinkedIn parse failed: ' + msg.error)
+    document.getElementById('setup-parsing').style.display = 'none'
+  }
+
+  if (msg.type === 'FILL_PROGRESS') {
+    updateFillProgress(msg.filled, msg.total)
+  }
+
+  if (msg.type === 'FILL_COMPLETE') {
+    onFillComplete(msg.filled, msg.total)
+  }
+})
+
+// ── TAB SYSTEM ──
+function initTabs() {
   document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => activateTab(tab.dataset.tab));
-  });
+    // Remove old listener by cloning
+    const newTab = tab.cloneNode(true)
+    tab.parentNode.replaceChild(newTab, tab)
+    newTab.addEventListener('click', () => activateTab(newTab.dataset.tab))
+  })
+}
 
-  // ── Setup overlay ──
+function activateTab(tabId) {
+  const allTabs = document.querySelectorAll('.tab')
+  const allContents = document.querySelectorAll('.tab-content')
+  allTabs.forEach(t => t.classList.remove('active'))
+  allContents.forEach(c => c.classList.remove('active'))
 
-  const setupOverlay = $('setupOverlay');
-  function showSetup() { setupOverlay.classList.remove('hidden'); }
-  function hideSetup() { setupOverlay.classList.add('hidden'); }
+  const tab = document.querySelector(`.tab[data-tab="${tabId}"]`)
+  const content = document.getElementById('tab-' + tabId)
+  if (tab) tab.classList.add('active')
+  if (content) content.classList.add('active')
+}
 
-  // On load: check for existing profile
-  chrome.storage.local.get(['setupComplete', 'userProfile'], (result) => {
-    if (result.setupComplete && result.userProfile) {
-      userProfile = result.userProfile;
-      $('setupSkipBtn').classList.remove('hidden');
+// ── LISTING MODE ──
+async function initListingMode(appState, userProfile) {
+  // Request page data
+  window.parent.postMessage({ type: 'REQUEST_PAGE_DATA' }, '*')
+
+  // Restore prior analysis
+  const analysis = appState?.currentAnalysis
+  if (analysis?.company) {
+    showAnalysisResults(analysis)
+    const hint = document.getElementById('recruiter-company-hint')
+    if (hint) hint.textContent = 'Find recruiters at ' + analysis.company
+  }
+
+  // Wire up buttons (clone to remove old listeners)
+  wireBtn('analyze-btn', handleAnalyze)
+  wireBtn('humanize-btn', handleHumanize)
+  wireBtn('save-notion-btn', handleSaveNotion)
+  wireBtn('apply-btn', handleApply)
+  wireBtn('find-recruiters-btn', handleFindRecruiters)
+  wireBtn('reanalyze-btn', () => {
+    const pre = document.getElementById('pre-analysis')
+    const res = document.getElementById('analysis-results')
+    if (pre) pre.style.display = 'block'
+    if (res) res.style.display = 'none'
+  })
+  wireBtn('close-sidebar-btn', closeSidebar)
+  wireBtn('profile-settings-btn', () => showScreen('setup'))
+  wireBtn('update-profile-btn', () => showScreen('setup'))
+  wireBtn('copy-outreach-btn', () => {
+    const el = document.getElementById('outreach-text')
+    if (el) copyText(el.textContent)
+  })
+
+  // Profile display
+  renderProfileDisplay(userProfile)
+
+  initTabs()
+}
+
+async function handleAnalyze() {
+  window.parent.postMessage({ type: 'REQUEST_PAGE_DATA' }, '*')
+
+  // Wait for PAGE_DATA response
+  const pageData = await new Promise(resolve => {
+    const handler = (event) => {
+      if (event.data?.type === 'PAGE_DATA') {
+        window.removeEventListener('message', handler)
+        resolve(event.data)
+      }
+    }
+    window.addEventListener('message', handler)
+    setTimeout(() => { window.removeEventListener('message', handler); resolve(null) }, 5000)
+  })
+
+  if (!pageData || !pageData.jobText || pageData.jobText.length < 100) {
+    showError('Could not read job posting. Make sure you\'re on a job listing page.')
+    return
+  }
+
+  const { userProfile } = await chrome.storage.local.get('userProfile')
+  const profileText = buildProfileText(userProfile)
+
+  showAnalyzingState('Analyzing job posting...')
+
+  try {
+    const response = await fetch(BACKEND + '/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rawText: pageData.jobText,
+        url: pageData.url,
+        userProfile: profileText
+      })
+    })
+
+    const data = await response.json()
+    if (!data.success) throw new Error(data.error || 'Analysis failed')
+
+    const analysis = {
+      ...data.analysis,
+      sourceUrl: pageData.url,
+      analyzedAt: new Date().toISOString()
+    }
+
+    const { appState = {} } = await chrome.storage.local.get('appState')
+    await chrome.storage.local.set({ appState: { ...appState, currentAnalysis: analysis } })
+
+    showAnalysisResults(analysis)
+  } catch (err) {
+    showError('Analysis failed: ' + err.message)
+  }
+}
+
+function showAnalysisResults(analysis) {
+  const preEl = document.getElementById('pre-analysis')
+  const loadEl = document.getElementById('analyzing-state')
+  const resEl = document.getElementById('analysis-results')
+  if (preEl) preEl.style.display = 'none'
+  if (loadEl) loadEl.style.display = 'none'
+  if (resEl) resEl.style.display = 'block'
+
+  const score = analysis.fitScore || 0
+  const scoreEl = document.getElementById('fit-score-num')
+  const circleEl = document.getElementById('fit-score-circle')
+  if (scoreEl) scoreEl.textContent = score
+  if (circleEl) {
+    circleEl.style.borderColor = score >= 80 ? '#00d4aa' : score >= 60 ? '#f59e0b' : '#ef4444'
+  }
+
+  setText('result-role', analysis.role || '')
+  setText('result-company', analysis.company || '')
+  setText('result-reason', analysis.fitReasoning || '')
+  setText('mini-kw', (analysis.atsScore?.keyword || '--') + '%')
+  setText('mini-fmt', (analysis.atsScore?.format || '--') + '%')
+  setText('mini-hum', (analysis.atsScore?.human || '--') + '%')
+
+  const bulletsContainer = document.getElementById('bullets-container')
+  if (bulletsContainer && analysis.resumeBullets) {
+    bulletsContainer.innerHTML = analysis.resumeBullets.map(b => `
+      <div class="bullet-item">
+        <span class="bullet-text">${escapeHtml(b)}</span>
+        <button class="btn-copy-tiny" onclick="copyText(${JSON.stringify(b)})">Copy</button>
+      </div>
+    `).join('')
+  }
+
+  setText('outreach-text', analysis.outreachMessage || '')
+
+  const applyBtn = document.getElementById('apply-btn')
+  if (applyBtn) applyBtn.textContent = '🚀 Apply at ' + (analysis.company || 'Company')
+
+  renderATSTab(analysis.atsScore)
+}
+
+async function handleHumanize() {
+  const { appState } = await chrome.storage.local.get('appState')
+  const analysis = appState?.currentAnalysis
+  if (!analysis?.resumeBullets) { showToast('Analyze a job first'); return }
+
+  const btn = document.getElementById('humanize-btn')
+  if (btn) { btn.textContent = 'Humanizing...'; btn.disabled = true }
+
+  try {
+    const response = await fetch(BACKEND + '/api/humanize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bullets: analysis.resumeBullets })
+    })
+    const data = await response.json()
+
+    const { appState: state = {} } = await chrome.storage.local.get('appState')
+    const updated = { ...state, currentAnalysis: { ...state.currentAnalysis, resumeBullets: data.bullets } }
+    await chrome.storage.local.set({ appState: updated })
+
+    const bulletsContainer = document.getElementById('bullets-container')
+    if (bulletsContainer) {
+      bulletsContainer.innerHTML = data.bullets.map(b => `
+        <div class="bullet-item humanized">
+          <span class="bullet-text">${escapeHtml(b)}</span>
+          <button class="btn-copy-tiny" onclick="copyText(${JSON.stringify(b)})">Copy</button>
+        </div>
+      `).join('')
+    }
+    showToast('Bullets humanized!')
+  } catch (err) {
+    showToast('Humanize failed: ' + err.message)
+  } finally {
+    if (btn) { btn.textContent = '✦ Humanize Bullets'; btn.disabled = false }
+  }
+}
+
+async function handleSaveNotion() {
+  const { appState, userProfile } = await chrome.storage.local.get(['appState', 'userProfile'])
+  const analysis = appState?.currentAnalysis
+  if (!analysis) { showToast('Analyze a job first'); return }
+
+  const btn = document.getElementById('save-notion-btn')
+  if (btn) { btn.textContent = 'Saving...'; btn.disabled = true }
+
+  try {
+    const response = await fetch(BACKEND + '/api/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ analysis, notionKey: userProfile?.notionKey })
+    })
+    const data = await response.json()
+    if (data.success) {
+      showToast('Saved to Notion!')
+      const { appState: state = {} } = await chrome.storage.local.get('appState')
+      await chrome.storage.local.set({
+        appState: { ...state, currentAnalysis: { ...state.currentAnalysis, notionPageId: data.pageId } }
+      })
+      if (btn) btn.textContent = '✓ Saved to Notion'
     } else {
-      showSetup();
+      throw new Error(data.error)
     }
-  });
-
-  $('gearBtn').addEventListener('click', () => {
-    switchSetupTab('upload');
-    showSetup();
-  });
-
-  // ── Setup: tab switching ──
-
-  let activeSetupTab = 'upload';
-
-  function switchSetupTab(tab) {
-    activeSetupTab = tab;
-    document.querySelectorAll('.setup-tab-btn').forEach(b =>
-      b.classList.toggle('active', b.dataset.tab === tab)
-    );
-    document.querySelectorAll('.setup-tab-panel').forEach(p =>
-      p.classList.toggle('hidden', p.id !== `stab-${tab}`)
-    );
-    hideSetupStatus();
+  } catch (err) {
+    showToast('Save failed: ' + err.message)
+    if (btn) { btn.textContent = '💾 Save to Notion'; btn.disabled = false }
   }
+}
 
-  document.querySelectorAll('.setup-tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => switchSetupTab(btn.dataset.tab));
-  });
+async function handleApply() {
+  const { userProfile, appState } = await chrome.storage.local.get(['userProfile', 'appState'])
+  const analysis = appState?.currentAnalysis
+  if (!analysis) { showToast('Please analyze the job first'); return }
 
-  // ── Setup: file upload ──
+  const btn = document.getElementById('apply-btn')
+  if (btn) { btn.textContent = 'Preparing...'; btn.disabled = true }
 
-  let setupSelectedFile = null;
+  try {
+    const profileText = buildProfileText(userProfile)
+    const response = await fetch(BACKEND + '/api/generate-autofill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userProfile: profileText, jobAnalysis: analysis, questions: [] })
+    })
+    const data = await response.json()
 
-  const setupDropzone  = $('setupDropzone');
-  const setupFileInput = $('setupFileInput');
-
-  $('setupBrowseBtn').addEventListener('click', (e) => { e.stopPropagation(); setupFileInput.click(); });
-  setupDropzone.addEventListener('click', () => setupFileInput.click());
-
-  setupDropzone.addEventListener('dragover', (e) => { e.preventDefault(); setupDropzone.classList.add('drag-over'); });
-  setupDropzone.addEventListener('dragleave', () => setupDropzone.classList.remove('drag-over'));
-  setupDropzone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    setupDropzone.classList.remove('drag-over');
-    if (e.dataTransfer.files[0]) handleSetupFile(e.dataTransfer.files[0]);
-  });
-
-  setupFileInput.addEventListener('change', () => {
-    if (setupFileInput.files[0]) handleSetupFile(setupFileInput.files[0]);
-  });
-
-  $('setupClearFileBtn').addEventListener('click', () => {
-    setupSelectedFile = null;
-    setupFileInput.value = '';
-    $('setupFileSelected').classList.add('hidden');
-    $('setupDropzone').classList.remove('hidden');
-    hideSetupStatus();
-  });
-
-  function handleSetupFile(file) {
-    const ext = file.name.split('.').pop().toLowerCase();
-    if (!['pdf', 'docx'].includes(ext)) {
-      showSetupStatus('Only PDF and DOCX files are supported.', 'error');
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      showSetupStatus('File too large — max 5MB.', 'error');
-      return;
-    }
-    setupSelectedFile = file;
-    $('setupFileName').textContent = file.name;
-    $('setupFileSelected').classList.remove('hidden');
-    $('setupDropzone').classList.add('hidden');
-    hideSetupStatus();
-  }
-
-  // ── Setup: LinkedIn extraction ──
-
-  $('setupLinkedInBtn').addEventListener('click', async () => {
-    const btn  = $('setupLinkedInBtn');
-    const hint = $('setupLinkedInHint');
-    btn.disabled = true;
-    btn.textContent = 'Extracting…';
-    hideSetupStatus();
-
-    try {
-      const response = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ type: 'GET_PAGE_TEXT' }, (resp) => {
-          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-          else resolve(resp);
-        });
-      });
-
-      if (!response?.url?.includes('linkedin.com/in/')) {
-        hint.textContent = '⚠ Please navigate to your LinkedIn profile page first (linkedin.com/in/yourname)';
-        btn.disabled = false;
-        btn.textContent = 'Extract from Current LinkedIn Page';
-        return;
+    const { appState: state = {} } = await chrome.storage.local.get('appState')
+    await chrome.storage.local.set({
+      appState: {
+        ...state,
+        pendingAutofill: {
+          data: data.autofillData,
+          jobAnalysis: analysis,
+          timestamp: Date.now(),
+          status: 'pending',
+          sourceUrl: appState?.currentUrl
+        }
       }
+    })
 
-      const text = response.rawText || '';
-      if (text.length < 100) {
-        showSetupStatus('Not enough text extracted. Try the Paste Resume tab instead.', 'error');
-        btn.disabled = false;
-        btn.textContent = 'Extract from Current LinkedIn Page';
-        return;
-      }
-
-      await parseTextAndSave(text);
-    } catch (err) {
-      btn.disabled = false;
-      btn.textContent = 'Extract from Current LinkedIn Page';
-      showSetupStatus(`Error: ${err.message}`, 'error');
-    }
-  });
-
-  // ── Setup: paste char count ──
-
-  $('setupPasteArea').addEventListener('input', () => {
-    const len = $('setupPasteArea').value.length;
-    $('setupCharCount').textContent = `${len} character${len === 1 ? '' : 's'}`;
-  });
-
-  // ── Setup: status helpers ──
-
-  function showSetupStatus(msg, type = 'info') {
-    const el = $('setupStatus');
-    el.className = `setup-status ${type}`;
-    $('setupStatusMsg').textContent = msg;
-    el.classList.remove('hidden');
+    if (btn) { btn.textContent = '✓ Ready — Click Apply on page'; btn.style.background = '#00d4aa' }
+    window.parent.postMessage({ type: 'CLICK_APPLY_BUTTON' }, '*')
+  } catch (err) {
+    if (btn) { btn.textContent = '🚀 Apply Now'; btn.disabled = false }
+    showError('Failed: ' + err.message)
   }
+}
 
-  function hideSetupStatus() {
-    $('setupStatus').classList.add('hidden');
-  }
+async function handleFindRecruiters() {
+  const { appState } = await chrome.storage.local.get('appState')
+  const analysis = appState?.currentAnalysis
+  if (!analysis?.company) { showToast('Analyze a job first to get company name'); return }
 
-  // ── Setup: save button ──
+  const preEl = document.getElementById('recruiters-pre')
+  const loadEl = document.getElementById('recruiters-loading')
+  const resEl = document.getElementById('recruiters-results')
+  if (preEl) preEl.style.display = 'none'
+  if (loadEl) loadEl.style.display = 'block'
 
-  function setSetupSaving() {
-    const btn = $('setupSaveBtn');
-    btn.disabled = true;
-    $('setupSaveBtnInner').innerHTML = `<span class="setup-spinner"></span> Parsing your profile…`;
-  }
+  try {
+    const response = await fetch(BACKEND + '/api/find-recruiters', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company: analysis.company, role: analysis.role })
+    })
+    const data = await response.json()
 
-  function setSetupIdle() {
-    $('setupSaveBtn').disabled = false;
-    $('setupSaveBtnInner').textContent = 'Save Profile & Continue →';
-  }
-
-  $('setupSaveBtn').addEventListener('click', () => runSetupSave());
-
-  async function runSetupSave() {
-    hideSetupStatus();
-
-    if (activeSetupTab === 'upload') {
-      if (!setupSelectedFile) {
-        showSetupStatus('Please select a PDF or DOCX file first.', 'error');
-        return;
-      }
-      await parseFileAndSave(setupSelectedFile);
-
-    } else if (activeSetupTab === 'paste') {
-      const text = $('setupPasteArea').value.trim();
-      if (text.length < 100) {
-        showSetupStatus('Please paste more resume text (at least 100 characters).', 'error');
-        return;
-      }
-      await parseTextAndSave(text);
-
-    } else if (activeSetupTab === 'linkedin') {
-      showSetupStatus('Click the blue "Extract from Current LinkedIn Page" button above.', 'info');
-    }
-  }
-
-  async function parseFileAndSave(file) {
-    setSetupSaving();
-    try {
-      const base64 = await fileToBase64(file);
-      const ext    = file.name.split('.').pop().toLowerCase();
-      const res = await fetch(BACKEND + '/parse-profile', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ fileBase64: base64, fileType: ext }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      await persistProfile(data.parsedProfile);
-    } catch (err) {
-      setSetupIdle();
-      showSetupStatus(`Error: ${err.message}`, 'error');
-    }
-  }
-
-  async function parseTextAndSave(text) {
-    setSetupSaving();
-    try {
-      const res = await fetch(BACKEND + '/parse-profile', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ text }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      await persistProfile(data.parsedProfile);
-    } catch (err) {
-      setSetupIdle();
-      showSetupStatus(`Error: ${err.message}`, 'error');
-    }
-  }
-
-  async function persistProfile(parsedProfile) {
-    chrome.storage.local.set({ userProfile: parsedProfile, setupComplete: true }, () => {
-      userProfile = parsedProfile;
-      $('setupSkipBtn').classList.remove('hidden');
-      showSetupStatus('Profile saved!', 'success');
-      setTimeout(() => {
-        hideSetup();
-        renderProfileTab('profileContent');
-        renderProfileTab('profileFormContent');
-      }, 800);
-    });
-  }
-
-  function fileToBase64(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload  = () => resolve(reader.result.split(',')[1]);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  }
-
-  $('setupSkipBtn').addEventListener('click', () => hideSetup());
-
-  // ── Profile system ──
-
-  function renderProfileTab(containerId) {
-    const container = $(containerId);
-    if (!container) return;
-    if (!userProfile) {
-      container.innerHTML = '<div style="padding:20px;text-align:center;color:#7878a0">No profile saved yet.<br>Click the gear icon to set up.</div>';
-      return;
-    }
-    const sections = parseProfileSections(userProfile);
-    container.innerHTML = '';
-    sections.forEach(section => {
-      const sDiv = document.createElement('div');
-      sDiv.className = 'profile-section';
-      sDiv.innerHTML = `<div class="profile-section-title">${section.title}</div>`;
-      section.items.forEach(item => {
-        if (!item.value) return;
-        const itemEl = document.createElement('div');
-        itemEl.className = 'profile-item';
-        itemEl.innerHTML = `
-          <div class="profile-item-label">${item.label}</div>
-          <div class="profile-item-value">${escapeHtml(item.value)}</div>
-          <div class="profile-item-copied">Copied!</div>
-        `;
-        itemEl.addEventListener('click', () => {
-          navigator.clipboard.writeText(item.value).catch(() => {});
-          const copied = itemEl.querySelector('.profile-item-copied');
-          copied.classList.add('show');
-          setTimeout(() => copied.classList.remove('show'), 1500);
-        });
-        sDiv.appendChild(itemEl);
-      });
-      container.appendChild(sDiv);
-    });
-  }
-
-  function escapeHtml(str) {
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
-  function parseProfileSections(profileText) {
-    const extract = (patterns, text) => {
-      for (const p of patterns) {
-        const m = text.match(p);
-        if (m) return (m[1] || m[0] || '').trim();
-      }
-      return '';
-    };
-    const t = profileText;
-    return [
-      { title: 'Contact', items: [
-        { label: 'Name',     value: extract([/^([A-Z][a-z]+ [A-Z][a-z]+)/m, /Name[:\s]+([^\n]+)/i], t) },
-        { label: 'Email',    value: extract([/[\w.+-]+@[\w-]+\.[a-z]{2,}/i], t) },
-        { label: 'Phone',    value: extract([/(\+?1?[\s.-]?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4})/], t) },
-        { label: 'LinkedIn', value: extract([/(linkedin\.com\/in\/[\w-]+)/i], t) },
-        { label: 'GitHub',   value: extract([/(github\.com\/[\w-]+)/i], t) },
-      ]},
-      { title: 'Experience', items: [
-        { label: 'Current Title',      value: extract([/title[:\s]+([^\n]+)/i, /role[:\s]+([^\n]+)/i], t) },
-        { label: 'Years of Experience', value: extract([/(\d+)\+?\s*years?\s*(of)?\s*experience/i], t) },
-      ]},
-      { title: 'Education', items: [
-        { label: 'Degree',     value: extract([/(B\.?S\.?|M\.?S\.?|Ph\.?D\.?|Bachelor|Master)[^\n,]*/i], t) },
-        { label: 'University', value: extract([/University of [^\n,]+|[^\n,]+ University/i], t) },
-        { label: 'GPA',        value: extract([/GPA[:\s]*([\d.]+)/i], t) },
-      ]},
-      { title: 'Technical Skills', items: [
-        { label: 'Skills', value: (extract([/skills?[:\s]+([^\n]{20,})/i, /technologies[:\s]+([^\n]+)/i], t) || '').slice(0, 200) },
-      ]},
-    ];
-  }
-
-  // ── Edit profile buttons ──
-
-  $('editProfileBtn').addEventListener('click', () => {
-    switchSetupTab('upload');
-    showSetup();
-  });
-
-  $('editProfileFormBtn').addEventListener('click', () => {
-    switchSetupTab('upload');
-    showSetup();
-  });
-
-  // ── Time saved tracker ──
-
-  function updateTimeSaved(minutesAdded) {
-    chrome.storage.local.get(['jhos_time_saved'], result => {
-      const total = (result.jhos_time_saved || 0) + minutesAdded;
-      if (minutesAdded > 0) {
-        chrome.storage.local.set({ jhos_time_saved: total });
-      }
-      timeSavedMinutes = total;
-      const hours = Math.floor(total / 60);
-      const mins  = total % 60;
-      const text  = hours > 0
-        ? `You've saved ${hours}h ${mins}m with JobHuntOS`
-        : `You've saved ${total} minutes with JobHuntOS`;
-      if ($('timeSavedText')) $('timeSavedText').textContent = text;
-      if ($('timeSavedTextForm')) $('timeSavedTextForm').textContent = text;
-    });
-  }
-
-  chrome.storage.local.get(['jhos_time_saved'], r => {
-    timeSavedMinutes = r.jhos_time_saved || 0;
-    updateTimeSaved(0);
-  });
-
-  // ── Helpers ──
-
-  function showListingState(el) {
-    const welcomeState = $('welcomeState');
-    const loadingState = $('loadingState');
-    const errorState   = $('errorState');
-    const resultState  = $('resultState');
-    [welcomeState, loadingState, errorState, resultState].forEach(s => s && s.classList.add('hidden'));
-    if (el) el.classList.remove('hidden');
-  }
-
-  function truncateUrl(url, len = 42) {
-    if (!url) return '—';
-    try {
-      const { hostname, pathname } = new URL(url);
-      const short = hostname + pathname;
-      return short.length > len ? short.slice(0, len) + '…' : short;
-    } catch {
-      return url.slice(0, len);
-    }
-  }
-
-  function setUrlBar(url, showBadge = false) {
-    const urlText = $('urlText');
-    if (urlText) urlText.textContent = truncateUrl(url);
-    const badge = $('urlBadge');
-    if (badge) {
-      if (showBadge) badge.classList.remove('hidden');
-      else           badge.classList.add('hidden');
-    }
-  }
-
-  function clearUrlBadge() {
-    const badge = $('urlBadge');
-    if (badge) badge.classList.add('hidden');
-  }
-
-  function copyText(text, btn, label = 'Copy') {
-    navigator.clipboard.writeText(text).then(() => {
-      btn.textContent = '✓ Copied!';
-      btn.classList.add('copied');
-      setTimeout(() => { btn.textContent = label; btn.classList.remove('copied'); }, 2000);
-    }).catch(() => {
-      btn.textContent = '✓ Copied!';
-      btn.classList.add('copied');
-      setTimeout(() => { btn.textContent = label; btn.classList.remove('copied'); }, 2000);
-    });
-  }
-
-  function scoreColor(score) {
-    if (score >= 80) return 'var(--green)';
-    if (score >= 60) return 'var(--amber)';
-    return 'var(--red)';
-  }
-
-  function animateRing(ringEl, score, circumference = 163.4) {
-    const offset = circumference - (score / 100) * circumference;
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      ringEl.style.strokeDashoffset = offset;
-    }));
-  }
-
-  function detectAiWords(text) {
-    return AI_BUZZWORDS.filter(w => text.toLowerCase().includes(w.toLowerCase()));
-  }
-
-  function highlightAiWords(text) {
-    let result = text;
-    AI_BUZZWORDS.forEach(word => {
-      const re = new RegExp(`\\b(${word})\\b`, 'gi');
-      result = result.replace(re, `<span class="ai-word">$1</span>`);
-    });
-    return result;
-  }
-
-  // ── ATS rendering ──
-
-  function renderAts(ats) {
-    if (!ats) return;
-
-    const overall      = ats.overall ?? 0;
-    const overallBadge = $('atsOverallBadge');
-    overallBadge.innerHTML = `${overall}`;
-    overallBadge.style.background = `${scoreColor(overall)}33`;
-    overallBadge.style.color      = scoreColor(overall);
-
-    const circ  = 94.2;
-    const kRing = $('atsKeywordRing');
-    $('atsKeywordNum').textContent = ats.keyword ?? '—';
-    animateRing(kRing, ats.keyword ?? 0, circ);
-    if (kRing) kRing.style.stroke = scoreColor(ats.keyword ?? 0);
-
-    const fRing = $('atsFormatRing');
-    $('atsFormatNum').textContent = ats.format ?? '—';
-    animateRing(fRing, ats.format ?? 0, circ);
-    if (fRing) fRing.style.stroke = scoreColor(ats.format ?? 0);
-
-    const hRing = $('atsHumanRing');
-    $('atsHumanNum').textContent = ats.human ?? '—';
-    animateRing(hRing, ats.human ?? 0, circ);
-    if (hRing) hRing.style.stroke = scoreColor(ats.human ?? 0);
-
-    const foundEl = $('atsKeywordsFound');
-    foundEl.innerHTML = '';
-    (ats.breakdown?.keywordsFound || []).forEach(kw => {
-      const tag = document.createElement('span');
-      tag.className = 'tag tag-green';
-      tag.textContent = kw;
-      foundEl.appendChild(tag);
-    });
-
-    const missingEl = $('atsKeywordsMissing');
-    missingEl.innerHTML = '';
-    (ats.breakdown?.keywordsMissing || []).forEach(kw => {
-      const tag = document.createElement('span');
-      tag.className = 'tag tag-red';
-      tag.textContent = kw;
-      tag.title = `Add "${kw}" to your resume`;
-      missingEl.appendChild(tag);
-    });
-
-    const sugEl = $('atsSuggestions');
-    sugEl.innerHTML = '';
-    (ats.breakdown?.suggestions || []).forEach(s => {
-      const li = document.createElement('li');
-      li.className = 'ats-suggestion-item';
-      li.innerHTML = `<span class="suggestion-icon">💡</span><span>${escapeHtml(s)}</span>`;
-      sugEl.appendChild(li);
-    });
-  }
-
-  function updateHumanRing(score) {
-    const hRing = $('atsHumanRing');
-    if ($('atsHumanNum')) $('atsHumanNum').textContent = score;
-    if (hRing) {
-      hRing.style.stroke = scoreColor(score);
-      animateRing(hRing, score, 94.2);
-    }
-  }
-
-  // ── ATS tab population ──
-
-  function populateAtsTab(atsScore) {
-    const placeholder = $('atsTabPlaceholder');
-    const fullPanel   = $('atsTabFull');
-    if (!atsScore || !fullPanel) return;
-
-    if (placeholder) placeholder.classList.add('hidden');
-    fullPanel.classList.remove('hidden');
-
-    const overall = atsScore.overall ?? 0;
-    const color   = overall >= 80 ? '#00d4aa' : overall >= 60 ? '#f59e0b' : '#ef4444';
-
-    fullPanel.innerHTML = `
-      <div style="text-align:center;padding:20px 0 16px">
-        <div style="font-size:48px;font-weight:900;color:${color}">${overall}</div>
-        <div style="font-size:12px;color:#7878a0;margin-top:4px">Overall ATS Score</div>
-      </div>
-      <div style="display:flex;justify-content:space-around;padding:0 0 20px">
-        ${renderMiniScore('Keywords', atsScore.keyword ?? 0)}
-        ${renderMiniScore('Format', atsScore.format ?? 0)}
-        ${renderMiniScore('Human', atsScore.human ?? 0)}
-      </div>
-      ${renderAtsSection('Keywords Found', atsScore.breakdown?.keywordsFound || [], 'tag-green')}
-      ${renderAtsSection('Keywords Missing', atsScore.breakdown?.keywordsMissing || [], 'tag-red')}
-      ${renderAtsSuggestions(atsScore.breakdown?.suggestions || [])}
-    `;
-  }
-
-  function renderMiniScore(label, score) {
-    const color = score >= 80 ? '#00d4aa' : score >= 60 ? '#f59e0b' : '#ef4444';
-    return `
-      <div style="text-align:center">
-        <div style="font-size:24px;font-weight:800;color:${color}">${score}</div>
-        <div style="font-size:10px;color:#7878a0;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">${label}</div>
-      </div>
-    `;
-  }
-
-  function renderAtsSection(title, items, tagClass) {
-    if (!items.length) return '';
-    const tags = items.map(k => `<span class="tag ${tagClass}" style="margin-bottom:4px">${escapeHtml(k)}</span>`).join('');
-    return `
-      <div style="margin-bottom:16px">
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:#7878a0;margin-bottom:8px">${title}</div>
-        <div class="tags-wrap">${tags}</div>
-      </div>
-    `;
-  }
-
-  function renderAtsSuggestions(suggestions) {
-    if (!suggestions.length) return '';
-    const items = suggestions.map(s => `
-      <li class="ats-suggestion-item"><span class="suggestion-icon">💡</span><span>${escapeHtml(s)}</span></li>
-    `).join('');
-    return `
-      <div style="margin-bottom:16px">
-        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.7px;color:#7878a0;margin-bottom:8px">Suggestions</div>
-        <ul class="ats-suggestions">${items}</ul>
-      </div>
-    `;
-  }
-
-  // ── ATS collapsible toggle ──
-
-  function syncAtsCollapse() {
-    const body    = $('atsBody');
-    const chevron = $('atsChevron');
-    if (!body || !chevron) return;
-    if (atsCollapsed) {
-      body.classList.add('collapsed');
-      chevron.classList.remove('open');
-    } else {
-      body.classList.remove('collapsed');
-      chevron.classList.add('open');
-    }
-  }
-
-  const atsToggle = $('atsToggle');
-  if (atsToggle) {
-    atsToggle.addEventListener('click', () => {
-      atsCollapsed = !atsCollapsed;
-      syncAtsCollapse();
-    });
-  }
-
-  const atsChevron = $('atsChevron');
-  if (atsChevron) atsChevron.classList.add('open');
-
-  // ── Render bullets ──
-
-  function renderBullets(bullets) {
-    const list = $('bulletsList');
-    if (!list) return;
-    list.innerHTML = '';
-    const badge = $('bulletsBadge');
-    if (badge) badge.textContent = bullets.length;
-
-    bullets.forEach((bullet) => {
-      const aiWords = detectAiWords(bullet);
-      const li  = document.createElement('li');
-      li.className = 'bullet-item';
-
-      const dot = document.createElement('div');
-      dot.className = 'bullet-dot';
-
-      const span = document.createElement('span');
-      span.className = 'bullet-text';
-      if (aiWords.length > 0) {
-        span.innerHTML = highlightAiWords(bullet);
+    if (loadEl) loadEl.style.display = 'none'
+    if (resEl) {
+      resEl.style.display = 'block'
+      if (data.recruiters?.length > 0) {
+        resEl.innerHTML = data.recruiters.map(r => `
+          <div class="recruiter-card">
+            <div class="rec-name">${escapeHtml(r.name || '')}</div>
+            <div class="rec-title">${escapeHtml(r.title || '')}</div>
+            <div class="rec-email" onclick="copyText('${escapeAttr(r.email || '')}')">
+              ${escapeHtml(r.email || 'Email not found')}
+            </div>
+          </div>
+        `).join('')
       } else {
-        span.textContent = bullet;
+        resEl.innerHTML = '<div class="empty-state">No recruiters found for ' + escapeHtml(analysis.company) + '</div>'
       }
-
-      const btnWrap = document.createElement('div');
-      btnWrap.style.display        = 'flex';
-      btnWrap.style.flexDirection  = 'column';
-      btnWrap.style.gap            = '4px';
-      btnWrap.style.alignItems     = 'flex-end';
-
-      const btn = document.createElement('button');
-      btn.className = 'btn-copy';
-      btn.textContent = 'Copy';
-      btn.addEventListener('click', () => copyText(bullet, btn, 'Copy'));
-      btnWrap.appendChild(btn);
-
-      if (aiWords.length > 0) {
-        const badge = document.createElement('span');
-        badge.className = 'bullet-ai-badge';
-        badge.textContent = 'AI words';
-        badge.title = `Contains: ${aiWords.join(', ')}`;
-        btnWrap.appendChild(badge);
-      }
-
-      li.append(dot, span, btnWrap);
-      list.appendChild(li);
-    });
-  }
-
-  // ── Save button state machine ──
-
-  function setSaveIdle() {
-    const btn = $('saveBtn');
-    if (!btn) return;
-    btn.disabled  = false;
-    btn.className = 'btn-save';
-    $('saveBtnInner').innerHTML = `
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
-        <polyline points="17 21 17 13 7 13 7 21"/>
-        <polyline points="7 3 7 8 15 8"/>
-      </svg>
-      Save to Notion`;
-  }
-
-  function setSavingState() {
-    const btn = $('saveBtn');
-    if (!btn) return;
-    btn.disabled  = true;
-    btn.className = 'btn-save btn-save--saving';
-    $('saveBtnInner').innerHTML = `<span class="save-spinner"></span> Saving…`;
-  }
-
-  function setSavedState(notionUrl) {
-    const btn = $('saveBtn');
-    if (!btn) return;
-    btn.className = 'btn-save btn-save--saved';
-    $('saveBtnInner').innerHTML = `✓ Saved to Notion`;
-    if (notionUrl) {
-      btn.disabled = false;
-      btn.title    = 'Open in Notion';
-      btn.onclick  = () => window.open(notionUrl, '_blank');
-    } else {
-      btn.disabled = true;
     }
+  } catch (err) {
+    if (loadEl) loadEl.style.display = 'none'
+    if (preEl) preEl.style.display = 'block'
+    showToast('Failed to find recruiters: ' + err.message)
+  }
+}
+
+function renderATSTab(atsScore) {
+  if (!atsScore) return
+  const emptyEl = document.getElementById('ats-empty')
+  const contentEl = document.getElementById('ats-content')
+  if (emptyEl) emptyEl.style.display = 'none'
+  if (contentEl) contentEl.style.display = 'block'
+
+  const overall = Math.round((
+    (atsScore.keyword || 0) + (atsScore.format || 0) + (atsScore.human || 0)
+  ) / 3)
+  setText('ats-overall-score', overall + '%')
+
+  const foundList = document.getElementById('kw-found-list')
+  const missingList = document.getElementById('kw-missing-list')
+  if (foundList && atsScore.foundKeywords) {
+    foundList.innerHTML = atsScore.foundKeywords.map(k =>
+      `<span class="kw-pill found">${escapeHtml(k)}</span>`
+    ).join('')
+  }
+  if (missingList && atsScore.missingKeywords) {
+    missingList.innerHTML = atsScore.missingKeywords.map(k =>
+      `<span class="kw-pill missing">${escapeHtml(k)}</span>`
+    ).join('')
   }
 
-  function setSaveError() {
-    const btn = $('saveBtn');
-    if (!btn) return;
-    btn.disabled  = false;
-    btn.className = 'btn-save btn-save--error';
-    $('saveBtnInner').innerHTML = `✕ Save failed — try again`;
+  const suggestionsEl = document.getElementById('ats-suggestions')
+  if (suggestionsEl && atsScore.suggestions) {
+    suggestionsEl.innerHTML = atsScore.suggestions.map(s =>
+      `<div class="suggestion-item">• ${escapeHtml(s)}</div>`
+    ).join('')
+  }
+}
+
+// ── FORM MODE ──
+async function initFormMode(appState, userProfile) {
+  const analysis = appState?.currentAnalysis
+
+  if (analysis?.role) {
+    setText('form-job-role', analysis.role)
+    setText('form-job-company', analysis.company || '')
+
+    const badge = document.getElementById('form-fit-badge')
+    if (badge && analysis.fitScore) {
+      const color = analysis.fitScore >= 80 ? '#00d4aa' : analysis.fitScore >= 60 ? '#f59e0b' : '#ef4444'
+      badge.innerHTML = `<span style="color:${color};font-weight:700;font-size:18px">${analysis.fitScore}</span><span style="color:#94a3b8;font-size:10px">/100</span>`
+    }
+
+    renderFormKeywords(analysis.atsScore)
+  } else {
+    const nudge = document.getElementById('analyze-nudge')
+    if (nudge) nudge.style.display = 'block'
+    setText('form-job-role', 'Application Form')
   }
 
-  // ── Humanize button state machine ──
+  setTimeout(scanPageQuestions, 1000)
 
-  function setHumanizeIdle() {
-    const btn = $('humanizeBtn');
-    if (!btn) return;
-    btn.disabled  = false;
-    btn.className = 'btn-humanize';
-    $('humanizeBtnInner').textContent = '✦ Humanize My Bullets';
-  }
+  wireBtn('autofill-page-btn', handleAutofill)
+  wireBtn('next-page-btn', handleNextPage)
+  wireBtn('close-form-btn', closeSidebar)
+  wireBtn('undo-fill-btn', handleUndoFill)
+  wireBtn('gen-cover-btn', handleGenCover)
+  wireBtn('copy-cover-btn', () => {
+    const el = document.getElementById('cover-letter-text')
+    if (el) copyText(el.textContent)
+  })
 
-  function setHumanizingState() {
-    const btn = $('humanizeBtn');
-    if (!btn) return;
-    btn.disabled  = true;
-    btn.className = 'btn-humanize';
-    $('humanizeBtnInner').innerHTML = `<span class="save-spinner"></span> Humanizing…`;
-  }
+  renderProfileDisplay(userProfile, 'form-profile-display')
 
-  function setHumanizeDone() {
-    const btn = $('humanizeBtn');
-    if (!btn) return;
-    btn.disabled  = false;
-    btn.className = 'btn-humanize btn-humanize--done';
-    $('humanizeBtnInner').textContent = '✓ Humanized — Re-humanize?';
-  }
+  initTabs()
+}
 
-  // ── Reset to welcome ──
+async function scanPageQuestions() {
+  return new Promise(resolve => {
+    window.parent.postMessage({ type: 'SCAN_QUESTIONS' }, '*')
 
-  function resetToWelcome(msg) {
-    lastAnalysis   = null;
-    savedUrl       = null;
-    savedPageId    = null;
-    autofillActive = false;
-    const resumeSection = $('resumeSection');
-    if (resumeSection) resumeSection.classList.add('hidden');
-    const autofillBtn = $('autofillBtn');
-    if (autofillBtn) autofillBtn.classList.add('hidden');
-    const autofillSummary = $('autofillSummary');
-    if (autofillSummary) autofillSummary.classList.add('hidden');
-    const applySection = $('applySection');
-    if (applySection) applySection.classList.add('hidden');
-    const welcomeSub = $('welcomeSub');
-    if (welcomeSub) welcomeSub.textContent = msg || 'Ready to analyze — click Analyze This Job';
-    showListingState($('welcomeState'));
-  }
-
-  function showError(msg) {
-    const errorMsg = $('errorMsg');
-    if (errorMsg) errorMsg.textContent = msg || 'Something went wrong. Make sure the backend is running.';
-    showListingState($('errorState'));
-  }
-
-  // ── API: Analyze (SSE streaming) ──
-
-  async function analyze(payload) {
-    showListingState($('loadingState'));
-    clearUrlBadge();
-    currentUrl    = payload.url;
-    hasAnalyzed   = true;
-    autoReanalyze = true;
-
-    try {
-      const res = await fetch(BACKEND_ANALYZE_STREAM, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          url:         payload.url     || '',
-          rawText:     payload.rawText || '',
-          userProfile: userProfile     || '',
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `HTTP ${res.status}`);
+    const handler = (event) => {
+      if (event.data?.type === 'QUESTIONS_SCANNED') {
+        window.removeEventListener('message', handler)
+        renderQuestions(event.data.questions || [])
+        resolve(event.data.questions || [])
       }
+    }
+    window.addEventListener('message', handler)
 
-      const reader  = res.body.getReader();
-      const decoder = new TextDecoder();
-      let   buf     = '';
+    // Fallback: if no response in 3s, show empty state
+    setTimeout(() => {
+      window.removeEventListener('message', handler)
+      const badge = document.getElementById('q-count-badge')
+      if (badge && badge.textContent === 'Scanning...') {
+        badge.textContent = '0 found'
+      }
+      resolve([])
+    }, 3000)
+  })
+}
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+function renderQuestions(questions) {
+  const list = document.getElementById('questions-list')
+  const badge = document.getElementById('q-count-badge')
+  if (badge) badge.textContent = questions.length + ' found'
+  if (!list) return
 
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop();
+  if (questions.length === 0) {
+    list.innerHTML = '<div class="q-empty">No questions detected on this page</div>'
+    return
+  }
 
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          let msg;
-          try { msg = JSON.parse(line.slice(6)); } catch { continue; }
+  list.innerHTML = questions.map((q, i) => `
+    <div class="question-item" id="q-item-${i}">
+      <div class="q-status" id="q-status-${i}"></div>
+      <div class="q-text">${escapeHtml(q.label || q.placeholder || 'Field ' + (i+1))}</div>
+      <div class="q-type">${escapeHtml(q.type || 'text')}</div>
+    </div>
+  `).join('')
+}
 
-          if (msg.type === 'scraping_done') {
-            const lt = $('loadingText');
-            if (lt) lt.textContent = 'Scoring your fit…';
-          }
+function setQuestionStatus(index, status) {
+  const statusEl = document.getElementById('q-status-' + index)
+  const itemEl = document.getElementById('q-item-' + index)
+  if (statusEl) {
+    statusEl.className = 'q-status ' + status
+    statusEl.textContent = status === 'filling' ? '...' : status === 'filled' ? '✓' : status === 'failed' ? '✗' : ''
+  }
+  if (itemEl) {
+    itemEl.className = 'question-item ' + status
+  }
+}
 
-          if (msg.type === 'tier1') {
-            const tier1Data = msg.data;
-            if (typeof tier1Data.fitScore !== 'number' || tier1Data.fitScore <= 0) {
-              throw new Error('Analysis returned an invalid fit score. The page may not be a job posting.');
-            }
-            renderTier1(tier1Data);
-            const lt = $('loadingText');
-            if (lt) lt.textContent = 'Loading ATS analysis…';
-          }
+function updateFillProgress(filled, total) {
+  const undoRow = document.getElementById('undo-row')
+  const countEl = document.getElementById('filled-count')
+  if (undoRow) undoRow.style.display = 'flex'
+  if (countEl) countEl.textContent = filled + ' of ' + total + ' fields filled'
+}
 
-          if (msg.type === 'tier2') {
-            renderTier2(msg.data);
-          }
+function onFillComplete(filled, total) {
+  const btn = document.getElementById('autofill-page-btn')
+  if (btn) {
+    btn.textContent = '✓ Filled ' + filled + ' fields'
+    btn.disabled = false
+    btn.style.background = '#00d4aa'
+  }
+  updateFillProgress(filled, total)
+  showToast('Filled ' + filled + ' fields!')
+  updateTimeSaved(2)
+}
 
-          if (msg.type === 'done') {
-            showListingState($('resultState'));
-            updateTimeSaved(5);
-          }
+async function handleAutofill() {
+  const btn = document.getElementById('autofill-page-btn')
+  if (btn) { btn.textContent = 'Preparing...'; btn.disabled = true }
 
-          if (msg.type === 'error') {
-            throw new Error(msg.message);
-          }
+  const { userProfile, appState } = await chrome.storage.local.get(['userProfile', 'appState'])
+
+  try {
+    const profileText = buildProfileText(userProfile)
+    const analysis = appState?.currentAnalysis || {}
+    const questions = await scanPageQuestions()
+
+    const response = await fetch(BACKEND + '/api/generate-autofill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userProfile: profileText, jobAnalysis: analysis, questions })
+    })
+
+    const data = await response.json()
+
+    const { appState: state = {} } = await chrome.storage.local.get('appState')
+    await chrome.storage.local.set({
+      appState: {
+        ...state,
+        pendingAutofill: {
+          data: data.autofillData,
+          jobAnalysis: analysis,
+          timestamp: Date.now(),
+          status: 'pending'
         }
       }
-    } catch (err) {
-      showError(err.message);
-    }
+    })
+
+    window.parent.postMessage({
+      type: 'EXECUTE_AUTOFILL',
+      autofillData: data.autofillData,
+      jobAnalysis: analysis
+    }, '*')
+
+    if (btn) btn.textContent = 'Filling form...'
+  } catch (err) {
+    if (btn) { btn.textContent = '⚡ Autofill This Page'; btn.disabled = false }
+    showError('Autofill failed: ' + err.message)
   }
+}
 
-  function renderTier1(data) {
-    lastAnalysis = { ...data };
-    savedUrl     = null;
-    savedPageId  = null;
-    const resumeSection = $('resumeSection');
-    if (resumeSection) resumeSection.classList.add('hidden');
-    setSaveIdle();
-    setHumanizeIdle();
-    clearUrlBadge();
+async function handleNextPage() {
+  window.parent.postMessage({ type: 'CLICK_NEXT_PAGE' }, '*')
+  setTimeout(scanPageQuestions, 2000)
 
-    if ($('jobRole'))      $('jobRole').textContent    = data.role    || 'Unknown Role';
-    if ($('jobCompany'))   $('jobCompany').textContent = data.company || 'Unknown Company';
-    if ($('scoreNum'))     $('scoreNum').textContent   = data.fitScore ?? '—';
-    if ($('fitReasoning')) $('fitReasoning').textContent = data.fitReasoning || '';
-
-    const mainRing = $('ringFill');
-    if (mainRing) {
-      mainRing.style.stroke = scoreColor(data.fitScore ?? 0);
-      if (typeof data.fitScore === 'number') animateRing(mainRing, data.fitScore);
-    }
-
-    renderBullets(data.resumeBullets || []);
-
-    const gapEl = $('skillsGapTags');
-    if (gapEl) {
-      gapEl.innerHTML = '';
-      (data.skillsGap || []).forEach((skill) => {
-        const tag = document.createElement('span');
-        tag.className = 'tag tag-red';
-        tag.textContent = skill;
-        gapEl.appendChild(tag);
-      });
-    }
-
-    const kwEl = $('keywordTags');
-    if (kwEl) {
-      kwEl.innerHTML = '';
-      (data.topKeywords || []).forEach((kw) => {
-        const tag = document.createElement('span');
-        tag.className = 'tag tag-blue';
-        tag.textContent = kw;
-        kwEl.appendChild(tag);
-      });
-    }
-
-    autofillActive = false;
-    setAutofillIdle();
-    showAutofillBtn();
-    const autofillSummary = $('autofillSummary');
-    if (autofillSummary) autofillSummary.classList.add('hidden');
-    showApplySection();
-    setApplyIdle();
-
-    // Show skeletons for tier-2 content
-    const atsSkeleton = $('atsSkeleton');
-    const atsRealContent = $('atsRealContent');
-    const atsOverallBadge = $('atsOverallBadge');
-    if (atsSkeleton) atsSkeleton.classList.remove('hidden');
-    if (atsRealContent) atsRealContent.classList.add('hidden');
-    if (atsOverallBadge) {
-      atsOverallBadge.innerHTML = '<span class="tier2-badge-spinner"></span>';
-      atsOverallBadge.style.background = '';
-      atsOverallBadge.style.color = '';
-    }
-
-    const outreachSkeleton = $('outreachSkeleton');
-    const outreachText = $('outreachText');
-    const copyOutreachBtn = $('copyOutreachBtn');
-    if (outreachSkeleton) outreachSkeleton.classList.remove('hidden');
-    if (outreachText) { outreachText.classList.add('hidden'); outreachText.textContent = ''; }
-    if (copyOutreachBtn) copyOutreachBtn.classList.add('hidden');
-
-    showListingState($('resultState'));
-
-    // Also show the analyze prompt in form mode if no analysis was done
-    if (currentMode === 'form') {
-      const analyzePromptCard = $('analyzePromptCard');
-      if (analyzePromptCard) analyzePromptCard.classList.add('hidden');
-    }
-
-    // If in form mode, update the fit badge
-    if (currentMode === 'form') {
-      const formFitBadge = $('formFitBadge');
-      if (formFitBadge && typeof data.fitScore === 'number') {
-        formFitBadge.textContent = `${data.fitScore}% Fit`;
-        formFitBadge.classList.remove('hidden');
-      }
-    }
+  const badge = document.getElementById('step-badge')
+  if (badge) {
+    const current = parseInt(badge.textContent.replace('Step ', '')) || 1
+    badge.textContent = 'Step ' + (current + 1)
   }
+}
 
-  function renderTier2(data) {
-    if (!lastAnalysis) return;
-    Object.assign(lastAnalysis, data);
+async function handleUndoFill() {
+  window.parent.postMessage({ type: 'UNDO_AUTOFILL' }, '*')
+  const btn = document.getElementById('autofill-page-btn')
+  if (btn) { btn.textContent = '⚡ Autofill This Page'; btn.disabled = false; btn.style.background = '' }
+  const undoRow = document.getElementById('undo-row')
+  if (undoRow) undoRow.style.display = 'none'
+}
 
-    if (data.outreachMessage) {
-      const outreachSkeleton = $('outreachSkeleton');
-      const outreachText     = $('outreachText');
-      const copyAllBtn       = $('copyOutreachBtn');
-      if (outreachSkeleton) outreachSkeleton.classList.add('hidden');
-      if (outreachText) {
-        outreachText.textContent = data.outreachMessage;
-        outreachText.classList.remove('hidden');
-      }
-      if (copyAllBtn) {
-        copyAllBtn.classList.remove('hidden');
-        copyAllBtn.onclick = () => copyText(data.outreachMessage, copyAllBtn, '📋 Copy All');
-      }
-    }
+async function handleGenCover() {
+  const { userProfile, appState } = await chrome.storage.local.get(['userProfile', 'appState'])
+  const analysis = appState?.currentAnalysis
+  const btn = document.getElementById('gen-cover-btn')
+  if (btn) { btn.textContent = 'Generating...'; btn.disabled = true }
 
-    if (data.atsScore) {
-      const atsSkeleton    = $('atsSkeleton');
-      const atsRealContent = $('atsRealContent');
-      if (atsSkeleton)    atsSkeleton.classList.add('hidden');
-      if (atsRealContent) atsRealContent.classList.remove('hidden');
-      renderAts(data.atsScore);
-      populateAtsTab(data.atsScore);
-
-      // If in form mode and keywords tab is active, update it
-      if (currentMode === 'form') {
-        renderKeywordsTab(lastAnalysis);
-      }
-    }
+  try {
+    const response = await fetch(BACKEND + '/api/answer-questions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        questions: [{ label: 'Cover Letter', type: 'textarea' }],
+        userProfile: buildProfileText(userProfile),
+        jobAnalysis: analysis || {}
+      })
+    })
+    const data = await response.json()
+    const coverText = data.answers?.[0]?.value || ''
+    setText('cover-letter-text', coverText)
+    setText('cover-status', 'Generated')
+  } catch (err) {
+    showToast('Failed to generate cover letter')
+  } finally {
+    if (btn) { btn.textContent = 'Generate'; btn.disabled = false }
   }
+}
 
-  // ── API: Save ──
+function renderFormKeywords(atsScore) {
+  if (!atsScore) return
 
-  async function saveToNotion() {
-    if (!lastAnalysis) return;
-    setSavingState();
-    try {
-      const res  = await fetch(BACKEND_SAVE, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ ...lastAnalysis, url: pagePayload?.url || '' }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      savedUrl    = data.notionUrl;
-      savedPageId = data.notionPageId || null;
-      setSavedState(savedUrl);
-      showResumeSection();
-    } catch (err) {
-      console.error('[JobHuntOS] Save failed:', err.message);
-      setSaveError();
-    }
+  const found = atsScore.foundKeywords || []
+  const missing = atsScore.missingKeywords || []
+  const total = found.length + missing.length
+  const pct = total > 0 ? Math.round((found.length / total) * 100) : 0
+
+  const gaugeEl = document.getElementById('kw-gauge-fill')
+  const pctEl = document.getElementById('kw-gauge-pct')
+  const statusEl = document.getElementById('kw-match-status')
+
+  if (gaugeEl) {
+    const circumference = 157
+    const offset = circumference - (pct / 100) * circumference
+    gaugeEl.style.strokeDashoffset = offset
+    gaugeEl.style.stroke = pct >= 70 ? '#00d4aa' : pct >= 50 ? '#f59e0b' : '#ef4444'
   }
+  if (pctEl) pctEl.textContent = pct + '%'
+  if (statusEl) statusEl.textContent = pct + '% Keyword Match'
 
-  // ── API: Humanize ──
+  const foundEl = document.getElementById('form-kw-found')
+  const missingEl = document.getElementById('form-kw-missing')
+  if (foundEl) foundEl.innerHTML = found.map(k => `<span class="kw-pill found">${escapeHtml(k)}</span>`).join('')
+  if (missingEl) missingEl.innerHTML = missing.map(k => `<span class="kw-pill missing">${escapeHtml(k)}</span>`).join('')
+}
 
-  async function humanize() {
-    if (!lastAnalysis) return;
-    setHumanizingState();
+// ── SETUP SCREEN ──
+function initSetupScreen() {
+  document.querySelectorAll('.setup-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.setup-tab').forEach(t => t.classList.remove('active'))
+      document.querySelectorAll('.setup-content').forEach(c => c.classList.remove('active'))
+      tab.classList.add('active')
+      const content = document.getElementById('setup-' + tab.dataset.tab)
+      if (content) content.classList.add('active')
+    })
+  })
 
-    try {
-      const res = await fetch(BACKEND_HUMANIZE, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          bullets:         lastAnalysis.resumeBullets  || [],
-          outreachMessage: lastAnalysis.outreachMessage || '',
-          jobDescription:  pagePayload?.rawText || '',
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  window.parent.postMessage({ type: 'CHECK_LINKEDIN_PROFILE' }, '*')
 
-      if (data.humanizedBullets?.length) {
-        lastAnalysis.resumeBullets = data.humanizedBullets;
-        renderBullets(data.humanizedBullets);
-      }
+  wireBtn('parse-linkedin-btn', () => {
+    showSetupParsing()
+    window.parent.postMessage({ type: 'PARSE_LINKEDIN_NOW' }, '*')
+  })
 
-      if (data.humanizedOutreach) {
-        lastAnalysis.outreachMessage = data.humanizedOutreach;
-        const outreachEl = $('outreachText');
-        if (outreachEl) outreachEl.textContent = data.humanizedOutreach;
-        const copyAllBtn = $('copyOutreachBtn');
-        if (copyAllBtn) copyAllBtn.onclick = () => copyText(data.humanizedOutreach, copyAllBtn, '📋 Copy All');
-      }
+  const uploadZone = document.getElementById('upload-zone')
+  const fileInput = document.getElementById('resume-file')
 
-      if (typeof data.newHumanScore === 'number') {
-        updateHumanRing(data.newHumanScore);
-        if (lastAnalysis.atsScore) lastAnalysis.atsScore.human = data.newHumanScore;
-      }
+  uploadZone?.addEventListener('click', () => fileInput?.click())
+  uploadZone?.addEventListener('dragover', e => {
+    e.preventDefault()
+    uploadZone.classList.add('drag-over')
+  })
+  uploadZone?.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'))
+  uploadZone?.addEventListener('drop', e => {
+    e.preventDefault()
+    uploadZone.classList.remove('drag-over')
+    const file = e.dataTransfer.files[0]
+    if (file) handleFileUpload(file)
+  })
+  fileInput?.addEventListener('change', e => {
+    if (e.target.files[0]) handleFileUpload(e.target.files[0])
+  })
 
-      lastAnalysis.humanized = true;
-      setHumanizeDone();
-    } catch (err) {
-      console.error('[JobHuntOS] Humanize failed:', err.message);
-      setHumanizeIdle();
-    }
+  wireBtn('parse-paste-btn', async () => {
+    const text = document.getElementById('paste-resume-text')?.value.trim()
+    if (!text || text.length < 100) { showToast('Please paste more resume text'); return }
+    await parseProfileFromText(text, 'paste')
+  })
+
+  wireBtn('save-profile-btn', async () => {
+    const profileData = window._parsedProfileData
+    if (!profileData) return
+    await chrome.storage.local.set({ userProfile: { ...profileData, setupComplete: true } })
+    await init()
+  })
+}
+
+function showSetupParsing() {
+  document.querySelectorAll('.setup-content').forEach(c => c.style.display = 'none')
+  const parsingEl = document.getElementById('setup-parsing')
+  if (parsingEl) parsingEl.style.display = 'flex'
+}
+
+async function handleFileUpload(file) {
+  if (!file.name.match(/\.(pdf|docx)$/i)) { showToast('Please upload a PDF or DOCX file'); return }
+
+  showSetupParsing()
+
+  const formData = new FormData()
+  formData.append('resume', file)
+
+  try {
+    const response = await fetch(BACKEND + '/api/parse-resume-file', { method: 'POST', body: formData })
+    const data = await response.json()
+    showProfilePreview(data.profile, 'upload')
+  } catch (err) {
+    showToast('Failed to parse resume: ' + err.message)
+    document.getElementById('setup-parsing').style.display = 'none'
   }
+}
 
-  // ── Resume section ──
-
-  function showResumeSection() {
-    const resumeSection = $('resumeSection');
-    if (resumeSection) resumeSection.classList.remove('hidden');
-    const resumeResult = $('resumeResult');
-    if (resumeResult) resumeResult.classList.add('hidden');
-    setResumeIdle();
+async function parseProfileFromText(text, method) {
+  showSetupParsing()
+  try {
+    const response = await fetch(BACKEND + '/api/parse-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    })
+    const data = await response.json()
+    showProfilePreview(data.profile, method)
+  } catch (err) {
+    showToast('Failed to parse profile')
+    document.getElementById('setup-parsing').style.display = 'none'
   }
+}
 
-  function setResumeIdle() {
-    const btn = $('resumeBtn');
-    if (!btn) return;
-    btn.disabled  = false;
-    btn.className = 'btn-resume';
-    $('resumeBtnInner').innerHTML = `
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
-        <polyline points="14 2 14 8 20 8"/>
-        <line x1="16" y1="13" x2="8" y2="13"/>
-        <line x1="16" y1="17" x2="8" y2="17"/>
-      </svg>
-      Generate Tailored Resume`;
+function showProfilePreview(profile, method) {
+  window._parsedProfileData = { ...profile, setupMethod: method }
+
+  const parsingEl = document.getElementById('setup-parsing')
+  const previewEl = document.getElementById('setup-preview')
+  if (parsingEl) parsingEl.style.display = 'none'
+  if (previewEl) previewEl.style.display = 'block'
+
+  const fields = document.getElementById('preview-fields')
+  if (!fields) return
+
+  const p = profile.personal || {}
+  fields.innerHTML = `
+    <div class="preview-field"><span>Name:</span> ${escapeHtml(p.fullName || '-')}</div>
+    <div class="preview-field"><span>Email:</span> ${escapeHtml(p.email || '-')}</div>
+    <div class="preview-field"><span>Phone:</span> ${escapeHtml(p.phone || '-')}</div>
+    <div class="preview-field"><span>LinkedIn:</span> ${escapeHtml(p.linkedinUrl || '-')}</div>
+    <div class="preview-field"><span>GitHub:</span> ${escapeHtml(p.githubUrl || '-')}</div>
+    <div class="preview-field"><span>Experience:</span> ${(profile.workExperience || []).length} roles</div>
+    <div class="preview-field"><span>Education:</span> ${(profile.education || []).length} degrees</div>
+    <div class="preview-field"><span>Skills:</span> ${(profile.skills || []).slice(0, 5).join(', ')}...</div>
+  `
+}
+
+// ── PROFILE DISPLAY ──
+function renderProfileDisplay(profile, containerId = 'profile-display') {
+  const container = document.getElementById(containerId)
+  if (!container || !profile) return
+
+  const p = profile.personal || {}
+  const exp = profile.workExperience || []
+  const edu = profile.education || []
+
+  container.innerHTML = `
+    <div class="profile-section">
+      <div class="ps-title">Contact</div>
+      ${copyField('Name', p.fullName)}
+      ${copyField('Email', p.email)}
+      ${copyField('Phone', p.phone)}
+      ${copyField('Location', [p.city, p.state].filter(Boolean).join(', '))}
+    </div>
+    <div class="profile-section">
+      <div class="ps-title">Links</div>
+      ${copyField('LinkedIn', p.linkedinUrl)}
+      ${copyField('GitHub', p.githubUrl)}
+      ${copyField('Portfolio', p.portfolioUrl)}
+    </div>
+    ${exp.length > 0 ? `
+    <div class="profile-section">
+      <div class="ps-title">Experience</div>
+      ${exp.map(e => `
+        <div class="profile-exp-item">
+          <div class="exp-title">${escapeHtml(e.title || '')}</div>
+          <div class="exp-company">${escapeHtml(e.company || '')}</div>
+          ${(e.bullets || []).map(b => copyField('', b, true)).join('') || copyField('', e.description || '', true)}
+        </div>
+      `).join('')}
+    </div>
+    ` : ''}
+    ${edu.length > 0 ? `
+    <div class="profile-section">
+      <div class="ps-title">Education</div>
+      ${edu.map(e => `
+        <div class="profile-exp-item">
+          ${copyField('', (e.degree || '') + ' — ' + (e.school || ''), true)}
+          ${e.gpa ? copyField('GPA', e.gpa) : ''}
+        </div>
+      `).join('')}
+    </div>
+    ` : ''}
+    ${(profile.skills || []).length > 0 ? `
+    <div class="profile-section">
+      <div class="ps-title">Skills</div>
+      <div class="skills-wrap" onclick="copyText(${JSON.stringify((profile.skills||[]).join(', '))})">
+        ${(profile.skills || []).map(s => `<span class="skill-pill">${escapeHtml(s)}</span>`).join('')}
+      </div>
+    </div>
+    ` : ''}
+  `
+}
+
+function copyField(label, value, isBullet = false) {
+  if (!value) return ''
+  const safeVal = escapeHtml(value)
+  const jsonVal = JSON.stringify(value)
+  if (isBullet) {
+    return `<div class="profile-bullet" onclick="copyText(${jsonVal})">• ${safeVal}</div>`
   }
+  return `
+    <div class="profile-item" onclick="copyText(${jsonVal})">
+      ${label ? `<span class="pi-label">${label}</span>` : ''}
+      <span class="pi-value">${safeVal}</span>
+      <span class="pi-copy">📋</span>
+    </div>
+  `
+}
 
-  function setResumeLoading() {
-    const btn = $('resumeBtn');
-    if (!btn) return;
-    btn.disabled  = true;
-    btn.className = 'btn-resume btn-resume--loading';
-    $('resumeBtnInner').innerHTML = `<span class="save-spinner"></span> Generating your resume…`;
+// ── UNKNOWN SCREEN ──
+function initUnknownScreen() {
+  wireBtn('go-linkedin-btn', () => {
+    chrome.runtime.sendMessage({ action: 'openUrl', url: 'https://www.linkedin.com/jobs/' })
+  })
+}
+
+// ── UTILITIES ──
+function setText(id, text) {
+  const el = document.getElementById(id)
+  if (el) el.textContent = text
+}
+
+function showAnalyzingState(msg) {
+  const preEl = document.getElementById('pre-analysis')
+  const loadEl = document.getElementById('analyzing-state')
+  const resEl = document.getElementById('analysis-results')
+  if (preEl) preEl.style.display = 'none'
+  if (resEl) resEl.style.display = 'none'
+  if (loadEl) {
+    loadEl.style.display = 'flex'
+    const textEl = document.getElementById('analyze-loading-text')
+    if (textEl) textEl.textContent = msg
   }
+}
 
-  async function generateResume() {
-    if (!savedPageId || !lastAnalysis) return;
-    setResumeLoading();
+function showError(msg) {
+  const loadEl = document.getElementById('analyzing-state')
+  const preEl = document.getElementById('pre-analysis')
+  if (loadEl) loadEl.style.display = 'none'
+  if (preEl) preEl.style.display = 'block'
+  showToast(msg)
+}
 
-    try {
-      const res = await fetch(BACKEND_GENERATE_RESUME, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          notionPageId: savedPageId,
-          analysis:     lastAnalysis,
-          jobTitle:     lastAnalysis.role    || '',
-          company:      lastAnalysis.company || '',
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-
-      const resultEl = $('resumeResult');
-      if (resultEl) resultEl.classList.remove('hidden');
-      const resumeNote = $('resumeNote');
-      if (resumeNote) resumeNote.textContent = `Resume tailored for ${lastAnalysis.company || 'Company'} — ${lastAnalysis.role || 'Role'}`;
-      const resumeNotionLink = $('resumeNotionLink');
-      if (resumeNotionLink) resumeNotionLink.href = data.notionResumeUrl || '#';
-
-      const dlBtn = $('resumeDownloadBtn');
-      if (dlBtn) {
-        dlBtn.onclick = () => {
-          const bytes = atob(data.docxBase64);
-          const arr   = new Uint8Array(bytes.length);
-          for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-          const blob  = new Blob([arr], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
-          const url   = URL.createObjectURL(blob);
-          const a     = document.createElement('a');
-          a.href      = url;
-          a.download  = data.filename || 'Resume.docx';
-          a.click();
-          URL.revokeObjectURL(url);
-        };
-      }
-
-      const btn = $('resumeBtn');
-      if (btn) {
-        btn.disabled  = false;
-        btn.className = 'btn-resume';
-        $('resumeBtnInner').innerHTML = `↻ Re-generate Resume`;
-      }
-
-    } catch (err) {
-      console.error('[JobHuntOS] Resume generation failed:', err.message);
-      setResumeIdle();
-      const resumeNote   = $('resumeNote');
-      const resumeResult = $('resumeResult');
-      if (resumeNote)   resumeNote.textContent = `Error: ${err.message}`;
-      if (resumeResult) resumeResult.classList.remove('hidden');
-    }
+function showToast(msg) {
+  let toast = document.getElementById('jhos-toast')
+  if (!toast) {
+    toast = document.createElement('div')
+    toast.id = 'jhos-toast'
+    toast.style.cssText = `
+      position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+      background:#1e1e2e;color:#e2e8f0;padding:8px 16px;border-radius:8px;
+      font-size:13px;z-index:9999;border:1px solid rgba(255,255,255,0.1);
+      box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:opacity 0.3s;
+    `
+    document.body.appendChild(toast)
   }
-
-  // ── Autofill (listing mode) ──
-
-  function showAutofillBtn() {
-    const autofillBtn = $('autofillBtn');
-    if (autofillBtn) autofillBtn.classList.remove('hidden');
-  }
-
-  function setAutofillIdle() {
-    const btn = $('autofillBtn');
-    if (!btn) return;
-    btn.disabled   = false;
-    btn.textContent = '⚡ Autofill Application';
-    btn.className  = 'btn-autofill';
-  }
-
-  function setAutofillLoading() {
-    const btn = $('autofillBtn');
-    if (!btn) return;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="save-spinner"></span> Generating fill values…';
-    btn.className = 'btn-autofill btn-autofill--loading';
-  }
-
-  function setAutofillDone(count, platform) {
-    autofillActive = true;
-    const btn = $('autofillBtn');
-    if (btn) {
-      btn.disabled    = false;
-      btn.textContent = `✓ ${count} field${count !== 1 ? 's' : ''} filled — Undo`;
-      btn.className   = 'btn-autofill btn-autofill--done';
-    }
-
-    const summary = $('autofillSummary');
-    if (summary) {
-      summary.classList.remove('hidden');
-      summary.innerHTML = `
-        <span class="autofill-count">⚡ ${count} fields filled on this page</span>
-        <span class="autofill-platform">Platform: ${platform}</span>
-        <span class="autofill-warning">⚠ Review all fields before submitting</span>
-      `;
-    }
-  }
-
-  function setAutofillError(msg) {
-    const btn = $('autofillBtn');
-    if (btn) {
-      btn.disabled    = false;
-      btn.textContent = '⚡ Autofill Application';
-      btn.className   = 'btn-autofill btn-autofill--error';
-    }
-
-    const summary = $('autofillSummary');
-    if (summary) {
-      summary.classList.remove('hidden');
-      summary.innerHTML = `<span class="autofill-warning">✕ ${escapeHtml(msg)}</span>`;
-    }
-  }
-
-  async function runAutofill() {
-    if (!lastAnalysis) return;
-
-    if (autofillActive) {
-      chrome.tabs.query({}, (tabs) => {
-        const target = tabs
-          .filter(t => t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('chrome://'))
-          .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))[0];
-        if (target) {
-          chrome.tabs.sendMessage(target.id, { type: 'UNDO_AUTOFILL' }, () => {
-            void chrome.runtime.lastError;
-          });
-        }
-        autofillActive = false;
-        setAutofillIdle();
-        const autofillSummary = $('autofillSummary');
-        if (autofillSummary) autofillSummary.classList.add('hidden');
-        chrome.storage.local.remove(JHOS_STORAGE_KEY);
-      });
-      return;
-    }
-
-    setAutofillLoading();
-    const profile = userProfile || '';
-
-    chrome.tabs.query({}, async (tabs) => {
-      const target = tabs
-        .filter(t => t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('chrome://'))
-        .sort((a, b) => (b.lastAccessed ?? 0) - (a.lastAccessed ?? 0))[0];
-
-      if (!target) {
-        setAutofillError('No open tab found. Navigate to the application form first.');
-        return;
-      }
-
-      const trySameTab = () => new Promise((resolve) => {
-        chrome.tabs.sendMessage(target.id, {
-          type:         'START_AUTOFILL',
-          profileData:  profile,
-          analysisData: lastAnalysis,
-        }, (response) => {
-          if (chrome.runtime.lastError) { resolve(null); return; }
-          resolve(response);
-        });
-      });
-
-      let response = await trySameTab();
-
-      if (!response) {
-        chrome.runtime.sendMessage({
-          type: 'QUEUE_AUTOFILL',
-          payload: {
-            autofillValues: null,
-            profileData:    profile,
-            analysisData:   lastAnalysis,
-            triggeredAt:    Date.now(),
-          },
-        }, () => void chrome.runtime.lastError);
-
-        setAutofillDone('~', 'queued — switch to the application tab');
-        return;
-      }
-
-      if (response.success) {
-        setAutofillDone(response.filledCount, response.platform);
-      } else {
-        setAutofillError(response.error || 'Autofill failed.');
-      }
-    });
-  }
-
-  // ── Apply section ──
-
-  function showApplySection() {
-    const applySection = $('applySection');
-    if (applySection) applySection.classList.remove('hidden');
-  }
-
-  function setApplyIdle() {
-    const btn = $('applyBtn');
-    if (!btn) return;
-    btn.disabled    = false;
-    btn.className   = 'btn-apply';
-    btn.textContent = '🚀 Apply to This Job';
-    const applyStatus = $('applyStatus');
-    if (applyStatus) applyStatus.innerHTML = '';
-  }
-
-  function setApplyLoading(msg) {
-    const btn = $('applyBtn');
-    if (!btn) return;
-    btn.disabled  = true;
-    btn.innerHTML = `<span class="save-spinner"></span> ${msg}`;
-    btn.className = 'btn-apply';
-  }
-
-  function setApplyDone() {
-    const btn = $('applyBtn');
-    if (!btn) return;
-    btn.disabled    = false;
-    btn.className   = 'btn-apply btn-apply--done';
-    btn.textContent = '✓ Application ready — switch to form tab';
-  }
-
-  function setApplyError(msg) {
-    const btn = $('applyBtn');
-    if (!btn) return;
-    btn.disabled    = false;
-    btn.className   = 'btn-apply btn-apply--error';
-    btn.textContent = '⚠ ' + msg;
-  }
-
-  async function handleApply() {
-    if (!lastAnalysis) return;
-    setApplyLoading('Generating autofill data…');
-
-    try {
-      const profile = userProfile || '';
-
-      await new Promise(resolve =>
-        chrome.storage.local.set({
-          [JHOS_STORAGE_KEY]: {
-            autofillValues: null,
-            profileData:    profile,
-            analysisData:   lastAnalysis,
-            triggeredAt:    Date.now(),
-            status:         'pending',
-          }
-        }, resolve)
-      );
-
-      setApplyLoading('Finding Apply button…');
-
-      const clicked = await new Promise((resolve) => {
-        window.parent.postMessage({ type: 'FIND_AND_CLICK_APPLY' }, '*');
-        const handler = (ev) => {
-          if (ev.data?.type === 'APPLY_CLICK_RESULT') {
-            window.removeEventListener('message', handler);
-            resolve(ev.data.clicked || false);
-          }
-        };
-        window.addEventListener('message', handler);
-        setTimeout(() => { window.removeEventListener('message', handler); resolve(false); }, 3000);
-      });
-
-      setApplyDone();
-      const applyStatus = $('applyStatus');
-      if (applyStatus) {
-        applyStatus.innerHTML = clicked
-          ? `<span style="color:var(--green)">✓ Apply button clicked — autofill queued for the form</span>`
-          : `<span style="color:var(--amber)">⚠ Couldn't find Apply button — click it manually. Autofill is ready.</span>`;
-      }
-
-    } catch (err) {
-      setApplyError('Failed: ' + err.message);
-    }
-  }
-
-  // ════════════════════════════════════════
-  // FORM MODE — Autofill
-  // ════════════════════════════════════════
-
-  function requestQuestionScan() {
-    window.parent.postMessage({ type: 'SCAN_QUESTIONS' }, '*');
-  }
-
-  function renderQuestions(questions) {
-    scannedQuestions = questions;
-    const qCount = $('qCount');
-    if (qCount) qCount.textContent = questions.length;
-    const list = $('questionsList');
-    if (!list) return;
-    list.innerHTML = '';
-    questions.forEach((q, i) => {
-      const item = document.createElement('div');
-      item.className = 'question-item';
-      item.id = 'q-item-' + i;
-      item.innerHTML = `
-        <div class="q-status" id="q-status-${i}"></div>
-        <div class="q-text">${escapeHtml(q.label.slice(0, 80))}${q.label.length > 80 ? '…' : ''}</div>
-        <button class="q-ai-btn" data-qi="${i}">✨ AI</button>
-      `;
-      item.querySelector('.q-ai-btn').addEventListener('click', () => fillSingleQuestion(i));
-      list.appendChild(item);
-    });
-  }
-
-  function setQuestionStatus(index, status) {
-    const el = $('q-status-' + index);
-    if (!el) return;
-    el.className = 'q-status ' + status;
-    if (status === 'filled') el.textContent = '✓';
-    if (status === 'failed') el.textContent = '✗';
-    const textEl = el.nextElementSibling;
-    if (status === 'filled' && textEl) textEl.classList.add('filled-text');
-  }
-
-  async function fillSingleQuestion(index) {
-    const q = scannedQuestions[index];
-    if (!q) return;
-    setQuestionStatus(index, 'filling');
-
-    try {
-      const profile = userProfile || '';
-      const res = await fetch(BACKEND + '/answer-questions', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userProfile:  profile,
-          jobAnalysis:  lastAnalysis || {},
-          questions:    [{ label: q.label, type: q.type, name: q.name, options: q.options }],
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-
-      const answers = data.answers || [];
-      if (answers[0]) {
-        window.parent.postMessage({ type: 'EXECUTE_AUTOFILL', autofillValues: { [index]: answers[0] }, analysisData: lastAnalysis }, '*');
-      }
-      setQuestionStatus(index, 'filled');
-    } catch (err) {
-      console.error('[JobHuntOS] Single question fill failed:', err);
-      setQuestionStatus(index, 'failed');
-    }
-  }
-
-  async function handleFormAutofill() {
-    const btn = $('autofillPageBtn');
-    if (!btn) return;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="save-spinner"></span> Generating answers…';
-
-    const profile  = userProfile || '';
-    const analysis = lastAnalysis || {};
-
-    scannedQuestions.forEach((_, i) => setQuestionStatus(i, 'filling'));
-
-    try {
-      let questions = scannedQuestions;
-      if (!questions.length) {
-        requestQuestionScan();
-        await new Promise(r => setTimeout(r, 1200));
-        questions = scannedQuestions;
-      }
-
-      const res = await fetch(BACKEND + '/generate-autofill', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userProfile:  profile,
-          jobAnalysis:  analysis,
-          formFields:   questions.map(q => ({ label: q.label, type: q.type, name: q.name || '', options: q.options || [] })),
-        }),
-      });
-      const { autofillValues } = await res.json();
-
-      window.parent.postMessage({ type: 'EXECUTE_AUTOFILL', autofillValues, analysisData: analysis }, '*');
-
-      btn.disabled  = false;
-      btn.innerHTML = '✓ Filling…';
-
-    } catch (err) {
-      btn.disabled  = false;
-      btn.textContent = '⚡ Autofill This Page';
-      console.error('[JobHuntOS] Form autofill failed:', err);
-      scannedQuestions.forEach((_, i) => setQuestionStatus(i, 'failed'));
-    }
-  }
-
-  // ── Form mode: keywords tab ──
-
-  function renderKeywordsTab(analysisData) {
-    if (!analysisData) return;
-    const atsScore = analysisData.atsScore;
-    const pct      = atsScore?.keyword ?? 0;
-
-    const fill          = $('kwGaugeFill');
-    const circumference = 213.6;
-    const offset        = circumference - (pct / 100) * circumference;
-    if (fill) {
-      requestAnimationFrame(() => {
-        fill.style.strokeDashoffset = offset;
-        fill.style.stroke = pct >= 70 ? '#00d4aa' : pct >= 40 ? '#f59e0b' : '#ef4444';
-      });
-    }
-
-    const kwGaugePct   = $('kwGaugePct');
-    const kwGaugeLabel = $('kwGaugeLabel');
-    const kwMatchStatus = $('kwMatchStatus');
-
-    if (kwGaugePct)    kwGaugePct.textContent   = pct;
-    if (kwGaugeLabel)  kwGaugeLabel.textContent  = pct >= 70 ? 'Strong' : pct >= 40 ? 'Getting There' : 'Needs Work';
-    if (kwMatchStatus) kwMatchStatus.textContent = `Keyword Match — ${pct >= 70 ? 'Strong Match' : pct >= 40 ? 'Getting There' : 'Needs Work'}`;
-
-    const foundEl   = $('kwFoundList');
-    const missingEl = $('kwMissingList');
-    if (foundEl)   foundEl.innerHTML   = '';
-    if (missingEl) missingEl.innerHTML = '';
-
-    const foundKws   = atsScore?.breakdown?.keywordsFound  || analysisData.topKeywords || [];
-    const missingKws = atsScore?.breakdown?.keywordsMissing || analysisData.skillsGap   || [];
-
-    foundKws.forEach(kw => {
-      if (!foundEl) return;
-      const tag = document.createElement('span');
-      tag.className   = 'kw-tag kw-tag-found';
-      tag.textContent = kw;
-      foundEl.appendChild(tag);
-    });
-
-    missingKws.forEach(kw => {
-      if (!missingEl) return;
-      const tag = document.createElement('span');
-      tag.className   = 'kw-tag kw-tag-missing';
-      tag.textContent = kw;
-      missingEl.appendChild(tag);
-    });
-  }
-
-  // ── Form mode: cover letter ──
-
-  async function generateCoverLetter() {
-    const btn = $('genCoverBtn');
-    if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
-
-    try {
-      const res = await fetch(BACKEND + '/answer-questions', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userProfile: userProfile || '',
-          jobAnalysis: lastAnalysis || {},
-          questions:   [{ label: 'Cover Letter', type: 'textarea', name: 'cover_letter', options: [] }],
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-
-      const coverText = data.answers?.[0] || '';
-      if (coverText) {
-        const preview = $('coverLetterPreview');
-        const clStatus = $('clStatus');
-        const copyCoverBtn = $('copyCoverBtn');
-        if (preview) { preview.textContent = coverText; preview.classList.remove('hidden'); }
-        if (clStatus) { clStatus.textContent = 'Generated'; clStatus.classList.add('detected'); }
-        if (copyCoverBtn) {
-          copyCoverBtn.classList.remove('hidden');
-          copyCoverBtn.onclick = () => copyText(coverText, copyCoverBtn, 'Copy');
-        }
-      }
-    } catch (err) {
-      console.error('[JobHuntOS] Cover letter generation failed:', err);
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = 'Generate Cover Letter'; }
-    }
-  }
-
-  // ════════════════════════════════════════
-  // EVENT LISTENERS
-  // ════════════════════════════════════════
-
-  $('closeBtn').addEventListener('click', () => {
-    window.parent.postMessage({ type: 'CLOSE_SIDEBAR' }, '*');
-  });
-
-  $('analyzeBtn').addEventListener('click', () => {
-    if (!pagePayload) {
-      showError('Page data not ready yet. Please wait a moment and try again.');
-      return;
-    }
-    if (!pagePayload.rawText || pagePayload.rawText.length < 200) {
-      showError('Could not extract job description. Try scrolling to load the full job details first.');
-      return;
-    }
-    clearUrlBadge();
-    analyze(pagePayload);
-  });
-
-  $('retryBtn').addEventListener('click', () => {
-    if (pagePayload) analyze(pagePayload);
-    else window.parent.postMessage({ type: 'RETRY' }, '*');
-  });
-
-  $('reanalyzeBtn').addEventListener('click', () => {
-    if (pagePayload) analyze(pagePayload);
-  });
-
-  $('newJobBtn').addEventListener('click', () => {
-    resetToWelcome('Ready to analyze — click Analyze This Job');
-  });
-
-  $('saveBtn').addEventListener('click', () => {
-    if (!$('saveBtn').disabled) saveToNotion();
-  });
-
-  $('humanizeBtn').addEventListener('click', () => {
-    if (!$('humanizeBtn').disabled) humanize();
-  });
-
-  $('resumeBtn').addEventListener('click', () => {
-    if (!$('resumeBtn').disabled) generateResume();
-  });
-
-  $('autofillBtn').addEventListener('click', () => {
-    if (!$('autofillBtn').disabled) runAutofill();
-  });
-
-  $('applyBtn').addEventListener('click', () => {
-    if (!$('applyBtn').disabled) handleApply();
-  });
-
-  // Form mode buttons
-  $('autofillPageBtn').addEventListener('click', () => handleFormAutofill());
-
-  $('undoBtn').addEventListener('click', () => {
-    window.parent.postMessage({ type: 'UNDO_AUTOFILL_FORM' }, '*');
-    const undoBar = $('undoBar');
-    if (undoBar) undoBar.classList.add('hidden');
-    const autofillPageBtn = $('autofillPageBtn');
-    if (autofillPageBtn) { autofillPageBtn.disabled = false; autofillPageBtn.textContent = '⚡ Autofill This Page'; }
-  });
-
-  $('quickAnalyzeBtn').addEventListener('click', () => {
-    // Switch to listing mode and trigger analyze
-    setMode('listing');
-    activateTab('analyze');
-    if (pagePayload && pagePayload.rawText && pagePayload.rawText.length >= 200) {
-      analyze(pagePayload);
-    }
-  });
-
-  $('genCoverBtn').addEventListener('click', () => generateCoverLetter());
-
-  $('tailorResumeBtn').addEventListener('click', () => {
-    if (savedUrl) window.open(savedUrl, '_blank');
-    else if (lastAnalysis) saveToNotion();
-  });
-
-  // ════════════════════════════════════════
-  // MESSAGES FROM CONTENT.JS
-  // ════════════════════════════════════════
-
-  window.addEventListener('message', (event) => {
-    const data = event.data || {};
-    const { type } = data;
-
-    if (type === 'PAGE_DATA') {
-      const { url, rawText, pageType, jobInfo } = data;
-      pagePayload = { url, rawText };
-      setUrlBar(url, false);
-
-      // Update form mode job card
-      if (jobInfo) {
-        const formJobTitle   = $('formJobTitle');
-        const formJobCompany = $('formJobCompany');
-        if (formJobTitle)   formJobTitle.textContent   = jobInfo.title   || 'Application Form';
-        if (formJobCompany) formJobCompany.textContent = jobInfo.company || '';
-      }
-
-      // If new page type differs from current mode, switch
-      if (pageType && pageType !== currentMode) {
-        setMode(pageType);
-      }
-
-      // Show analyze prompt in form mode if no analysis
-      if (currentMode === 'form') {
-        const analyzePromptCard = $('analyzePromptCard');
-        if (analyzePromptCard) {
-          if (!lastAnalysis) analyzePromptCard.classList.remove('hidden');
-          else               analyzePromptCard.classList.add('hidden');
-        }
-        // Update fit badge if we have analysis
-        if (lastAnalysis && typeof lastAnalysis.fitScore === 'number') {
-          const formFitBadge = $('formFitBadge');
-          if (formFitBadge) {
-            formFitBadge.textContent = `${lastAnalysis.fitScore}% Fit`;
-            formFitBadge.classList.remove('hidden');
-          }
-        }
-      }
-    }
-
-    if (type === 'URL_CHANGED') {
-      const { url, pageType, jobInfo } = data;
-      if (url === currentUrl) return;
-      setUrlBar(url, hasAnalyzed);
-
-      if (hasAnalyzed) {
-        const badge = $('urlBadge');
-        if (badge) badge.classList.remove('hidden');
-        if (autoReanalyze && currentMode === 'listing') {
-          resetToWelcome('New job detected! Click Analyze This Job');
-        }
-      }
-
-      // If page type changed, switch mode
-      if (pageType && pageType !== currentMode) {
-        setMode(pageType);
-      }
-
-      // Update job card in form mode
-      if (jobInfo && currentMode === 'form') {
-        const formJobTitle   = $('formJobTitle');
-        const formJobCompany = $('formJobCompany');
-        if (formJobTitle)   formJobTitle.textContent   = jobInfo.title   || 'Application Form';
-        if (formJobCompany) formJobCompany.textContent = jobInfo.company || '';
-      }
-    }
-
-    if (type === 'EXTRACTION_ERROR') {
-      showError(data.message || 'Could not extract job description.');
-    }
-
-    if (type === 'QUESTIONS_SCANNED') {
-      renderQuestions(data.questions || []);
-    }
-
-    if (type === 'FILL_PROGRESS') {
-      setQuestionStatus(data.index, 'filled');
-    }
-
-    if (type === 'FILL_COMPLETE') {
-      const count = data.filledCount || 0;
-      const undoBar = $('undoBar');
-      if (undoBar) undoBar.classList.remove('hidden');
-      const filledCountText = $('filledCountText');
-      if (filledCountText) filledCountText.textContent = `${count} fields filled ✓`;
-      const autofillPageBtn = $('autofillPageBtn');
-      if (autofillPageBtn) { autofillPageBtn.disabled = false; autofillPageBtn.textContent = '✓ Filled — Autofill Again?'; }
-      updateTimeSaved(3);
-    }
-
-    if (type === 'FILL_ERROR') {
-      setQuestionStatus(data.index, 'failed');
-    }
-
-    if (type === 'APPLY_CLICK_RESULT') {
-      // handled inline in handleApply
-    }
-  });
-
-  // ── Initialize ──
-  // Start in listing mode, showing welcome state
-  const app = document.getElementById('app');
-  app.classList.add('mode-listing');
-  showListingState($('welcomeState'));
-
-})();
+  toast.textContent = msg
+  toast.style.opacity = '1'
+  clearTimeout(toast._timeout)
+  toast._timeout = setTimeout(() => { toast.style.opacity = '0' }, 3000)
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text).then(() => showToast('Copied!')).catch(() => {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+    showToast('Copied!')
+  })
+}
+
+function escapeHtml(str) {
+  if (!str) return ''
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function escapeAttr(str) {
+  if (!str) return ''
+  return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;')
+}
+
+function closeSidebar() {
+  window.parent.postMessage({ type: 'CLOSE_SIDEBAR' }, '*')
+}
+
+function toggleSection(headerEl) {
+  const body = headerEl.nextElementSibling
+  const toggle = headerEl.querySelector('.toggle')
+  if (!body) return
+  const isOpen = body.style.display !== 'none'
+  body.style.display = isOpen ? 'none' : 'block'
+  if (toggle) toggle.textContent = isOpen ? '▶' : '▼'
+}
+
+function wireBtn(id, handler) {
+  const el = document.getElementById(id)
+  if (!el) return
+  const newEl = el.cloneNode(true)
+  el.parentNode.replaceChild(newEl, el)
+  newEl.addEventListener('click', handler)
+}
+
+function buildProfileText(profile) {
+  if (!profile) return ''
+  const p = profile.personal || {}
+  const lines = [
+    p.fullName ? 'Name: ' + p.fullName : '',
+    p.email ? 'Email: ' + p.email : '',
+    p.phone ? 'Phone: ' + p.phone : '',
+    p.city ? 'Location: ' + [p.city, p.state].filter(Boolean).join(', ') : '',
+    p.linkedinUrl ? 'LinkedIn: ' + p.linkedinUrl : '',
+    p.githubUrl ? 'GitHub: ' + p.githubUrl : '',
+    '',
+    'WORK EXPERIENCE:',
+    ...(profile.workExperience || []).map(e =>
+      `${e.title} at ${e.company}\n${(e.bullets || []).join('\n') || e.description || ''}`
+    ),
+    '',
+    'EDUCATION:',
+    ...(profile.education || []).map(e =>
+      `${e.degree} - ${e.school}${e.gpa ? ' (GPA: ' + e.gpa + ')' : ''}`
+    ),
+    '',
+    'SKILLS: ' + (profile.skills || []).join(', '),
+    '',
+    ...(profile.projects || []).map(proj =>
+      `PROJECT: ${proj.name}\n${proj.description || ''}`
+    )
+  ]
+  return lines.filter(Boolean).join('\n')
+}
+
+async function updateTimeSaved(minutesAdded) {
+  const { timeSaved = 0 } = await chrome.storage.local.get('timeSaved')
+  const newTotal = timeSaved + minutesAdded
+  await chrome.storage.local.set({ timeSaved: newTotal })
+}
+
+// ── BOOTSTRAP ──
+document.addEventListener('DOMContentLoaded', init)

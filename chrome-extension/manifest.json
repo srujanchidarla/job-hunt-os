@@ -2,45 +2,67 @@
   "manifest_version": 3,
   "name": "JobHuntOS",
   "version": "1.1",
-  "description": "AI job analysis + one-click autofill. Fit score, ATS check, tailored bullets, Notion tracking.",
-  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "description": "AI job analysis, autofill, and recruiter outreach. Powered by Claude + Notion.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs",
+    "unlimitedStorage"
+  ],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "JobHuntOS — Click to open",
+    "default_title": "JobHuntOS",
     "default_icon": {
       "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "48": "icons/icon48.png"
     }
   },
-  "content_scripts": [{
-    "matches": [
-      "*://*.linkedin.com/*",
-      "*://*.indeed.com/*",
-      "*://*.greenhouse.io/*",
-      "*://*.lever.co/*",
-      "*://*.workday.com/*",
-      "*://*.myworkdayjobs.com/*",
-      "*://*.icims.com/*",
-      "*://*.smartrecruiters.com/*",
-      "*://*.jobvite.com/*",
-      "*://*.ashbyhq.com/*",
-      "*://*.bamboohr.com/*",
-      "*://*.amazon.jobs/*",
-      "*://account.amazon.jobs/*",
-      "*://*.wellfound.com/*",
-      "*://*.glassdoor.com/*",
-      "*://*.ziprecruiter.com/*",
-      "*://*.careers.walmart.com/*"
-    ],
-    "js": ["autofill.js", "content.js"],
-    "run_at": "document_idle"
-  }],
-  "web_accessible_resources": [{
-    "resources": ["sidebar.html", "sidebar.css", "sidebar.js", "icons/*"],
-    "matches": ["<all_urls>"]
-  }]
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.linkedin.com/*",
+        "*://*.indeed.com/*",
+        "*://*.greenhouse.io/*",
+        "*://*.lever.co/*",
+        "*://*.workday.com/*",
+        "*://*.myworkdayjobs.com/*",
+        "*://*.icims.com/*",
+        "*://*.smartrecruiters.com/*",
+        "*://*.jobvite.com/*",
+        "*://*.ashbyhq.com/*",
+        "*://*.bamboohr.com/*",
+        "*://account.amazon.jobs/*",
+        "*://*.amazon.jobs/*",
+        "*://*.careers.walmart.com/*",
+        "*://*.glassdoor.com/*",
+        "*://*.wellfound.com/*",
+        "*://*.ziprecruiter.com/*",
+        "*://*.metacareers.com/*",
+        "*://*.careers.google.com/*"
+      ],
+      "js": ["content.js"],
+      "css": ["sidebar.css"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "sidebar.html",
+        "sidebar.css",
+        "sidebar.js",
+        "setup.html",
+        "setup.css",
+        "setup.js",
+        "icons/*",
+        "autofill.js"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
