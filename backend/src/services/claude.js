@@ -6,6 +6,35 @@ function getClient() {
   return client;
 }
 
+// Safely parse JSON from Claude responses.
+// Claude sometimes wraps output in ```json fences, adds trailing commas,
+// or truncates at max_tokens. This function handles all known variants.
+function safeParseJSON(raw, label = 'claude') {
+  if (!raw) throw new Error(`${label}: empty response`)
+  let text = raw.trim()
+
+  // Strip ```json ... ``` or ``` ... ``` fences (any whitespace variant)
+  text = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim()
+
+  // Attempt 1: direct parse
+  try { return JSON.parse(text) } catch (e1) {
+    // Attempt 2: extract first complete {...} block (handles preamble text)
+    const match = text.match(/\{[\s\S]*\}/)
+    if (match) {
+      try { return JSON.parse(match[0]) } catch { /* fall through */ }
+    }
+
+    // Attempt 3: truncated JSON — find last complete top-level field
+    const lastBrace = text.lastIndexOf('}')
+    if (lastBrace > 0) {
+      try { return JSON.parse(text.slice(0, lastBrace + 1)) } catch { /* fall through */ }
+    }
+
+    console.error(`safeParseJSON(${label}) failed. e1: ${e1.message}. Raw (first 300):`, text.slice(0, 300))
+    throw new Error(`${label}: could not parse Claude JSON response — ${e1.message}`)
+  }
+}
+
 export const AI_BUZZWORDS = ['leverage', 'utilize', 'synergy', 'spearheaded', 'orchestrated',
   'deliverables', 'robust', 'innovative', 'cutting-edge', 'scalable', 'streamline',
   'holistic', 'paradigm', 'ecosystem', 'empower', 'transformative'];
@@ -62,11 +91,7 @@ export async function analyzeWithClaude(jobText, url, userProfile, tier) {
   });
 
   const raw = message.content[0].text.trim();
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return JSON.parse(raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, ''));
-  }
+  return safeParseJSON(raw, `analyzeWithClaude tier${tier}`)
 }
 
 // Legacy single-call kept for /api/analyze fallback
@@ -98,11 +123,7 @@ export async function humanizeContent({ bullets, outreachMessage, jobDescription
   });
 
   const raw = message.content[0].text.trim();
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return JSON.parse(raw.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, ''));
-  }
+  return safeParseJSON(raw, 'humanizeContent')
 }
 
 export async function generateSummary({ fitReasoning, topKeywords, role, company }) {
@@ -146,4 +167,56 @@ export async function parseProfile(rawText) {
     }],
   });
   return message.content[0].text.trim();
+}
+
+const PROFILE_SCHEMA = `{
+  "personal": {
+    "firstName": "", "lastName": "", "fullName": "",
+    "email": "", "phone": "", "city": "", "state": "", "country": "", "zip": "",
+    "linkedinUrl": "", "githubUrl": "", "portfolioUrl": ""
+  },
+  "currentRole": { "title": "", "company": "" },
+  "workExperience": [
+    { "title": "", "company": "", "location": "", "startDate": "", "endDate": "", "current": false, "type": "", "bullets": [], "description": "" }
+  ],
+  "education": [
+    { "school": "", "degree": "", "major": "", "startDate": "", "endDate": "", "gpa": "" }
+  ],
+  "projects": [
+    { "name": "", "description": "", "url": "", "technologies": [] }
+  ],
+  "skills": [],
+  "languages": [],
+  "jobPreferences": {
+    "desiredRole": "", "desiredSalary": "", "workType": "", "yearsOfExperience": "", "searchStatus": ""
+  },
+  "workAuthorization": { "authorizedInUS": true, "requiresSponsorship": false },
+  "rawText": ""
+}`;
+
+export async function parseProfileStructured(rawText) {
+  const message = await getClient().messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 4000,
+    system: [
+      {
+        type: 'text',
+        text: 'You are a resume parser. Extract all information into the exact JSON schema provided. Return ONLY valid JSON, no markdown, no explanation. Use empty string for missing string fields, empty array for missing array fields.',
+        cache_control: { type: 'ephemeral' },
+      },
+    ],
+    messages: [{
+      role: 'user',
+      content: `Extract all information from this resume/profile text into the JSON schema below. Keep bullet points concise (max 120 chars each). Limit to 5 bullets per job. Limit skills array to 30 items. Set rawText to empty string.\n\nSchema:\n${PROFILE_SCHEMA}\n\nInput:\n${rawText.slice(0, 6000)}`,
+    }],
+  });
+
+  const raw = message.content[0].text.trim();
+  try {
+    return safeParseJSON(raw, 'parseProfileStructured')
+  } catch {
+    // Last resort: return a minimal valid profile so setup doesn't break
+    console.error('parseProfileStructured: returning empty profile fallback')
+    return { personal:{}, workExperience:[], education:[], skills:[], projects:[], languages:[], jobPreferences:{}, workAuthorization:{ authorizedInUS:true, requiresSponsorship:false }, rawText:'' }
+  }
 }
