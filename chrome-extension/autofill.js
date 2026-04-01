@@ -1,6 +1,17 @@
 /* JobHuntOS Autofill — injected into every page via content_scripts */
 /* eslint-disable no-unused-vars */
 
+// ── Single-run sentinel ───────────────────────────────────────────────────────
+// background.js checks for this element before injecting autofill.js again.
+// If it already exists, the script was already injected — bail out immediately.
+if (document.getElementById('jhos-autofill-active')) {
+  // Already running — stop. This prevents the runaway re-injection loop.
+  throw new Error('JobHuntOS autofill already active on this page')
+}
+const _jhosActiveMarker = document.createElement('meta')
+_jhosActiveMarker.id = 'jhos-autofill-active'
+document.head.appendChild(_jhosActiveMarker)
+
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const JHOS_STORAGE_KEY = 'jhos_pending_autofill';

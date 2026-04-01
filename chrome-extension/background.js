@@ -166,9 +166,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'injectAutofill') {
     const tabId = sender.tab?.id
     if (!tabId) { sendResponse({ ok: false, error: 'no tabId' }); return }
-    chrome.scripting.executeScript({ target: { tabId }, files: ['autofill.js'] })
-      .then(() => sendResponse({ ok: true }))
-      .catch(err => sendResponse({ ok: false, error: err.message }))
+
+    // Check for the sentinel element autofill.js plants on the page.
+    // If it's already there, autofill is already running — don't inject again.
+    chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => !!document.getElementById('jhos-autofill-active')
+    })
+    .then(results => {
+      if (results[0]?.result) {
+        sendResponse({ ok: true, skipped: true })
+        return
+      }
+      return chrome.scripting.executeScript({ target: { tabId }, files: ['autofill.js'] })
+        .then(() => sendResponse({ ok: true }))
+    })
+    .catch(err => sendResponse({ ok: false, error: err.message }))
     return true  // async — keep channel open
   }
 

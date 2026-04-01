@@ -39,37 +39,40 @@ export const AI_BUZZWORDS = ['leverage', 'utilize', 'synergy', 'spearheaded', 'o
   'deliverables', 'robust', 'innovative', 'cutting-edge', 'scalable', 'streamline',
   'holistic', 'paradigm', 'ecosystem', 'empower', 'transformative'];
 
-// Tier 1 — fit score, bullets, skills gap, keywords (~4s, 600 tokens)
+// Tier 1 — fit score, bullets, skills gap, keywords
+// max_tokens 1200: a full tier1 response with 5 bullets + 5 keywords uses ~700-900 tokens.
+// 600 was too low — JSON was being truncated mid-response causing parse errors.
 const TIER1_SCHEMA = `{
   "company": "string",
   "role": "string",
-  "fitScore": 0-100,
+  "fitScore": 75,
   "fitReasoning": "2 sentences max",
   "resumeBullets": ["bullet1 (action verb + metric, max 20 words)", "bullet2", "bullet3"],
-  "skillsGap": ["skill1", "skill2", "skill3", "skill4"],
+  "skillsGap": ["skill1", "skill2", "skill3"],
   "topKeywords": ["kw1", "kw2", "kw3", "kw4", "kw5"]
 }`;
 
-// Tier 2 — ATS analysis + outreach (~4s, 900 tokens)
+// Tier 2 — ATS analysis + outreach
+// max_tokens 1200: outreach + full ATS breakdown uses ~700-1000 tokens.
 const TIER2_SCHEMA = `{
   "outreachMessage": "LinkedIn DM, 3-4 sentences, personalized to role/company",
   "atsScore": {
-    "overall": 0-100,
-    "keyword": 0-100,
-    "format": 0-100,
-    "human": 0-100,
+    "overall": 75,
+    "keyword": 80,
+    "format": 70,
+    "human": 75,
     "breakdown": {
       "keywordsFound": ["kw1", "kw2"],
       "keywordsMissing": ["kw1", "kw2"],
       "aiWords": ["word1"],
-      "suggestions": ["suggestion1", "suggestion2", "suggestion3"]
+      "suggestions": ["suggestion1", "suggestion2"]
     }
   }
 }`;
 
 export async function analyzeWithClaude(jobText, url, userProfile, tier) {
   const schema   = tier === 1 ? TIER1_SCHEMA : TIER2_SCHEMA;
-  const maxTok   = tier === 1 ? 600 : 900;
+  const maxTok   = 1200; // 600/900 was too low — caused mid-JSON truncation and parse errors
   const tierNote = tier === 1
     ? 'Focus: fit score, resume bullets, skills gap, keywords.'
     : `Focus: ATS analysis (keyword 40% + format 30% + human 30% weighted; penalize AI buzzwords: ${AI_BUZZWORDS.slice(0,6).join(', ')}...) and outreach message.`;
@@ -103,7 +106,7 @@ const HUMANIZE_SYSTEM = `Expert resume writer. Make AI content sound naturally h
 Rules: keep ALL metrics exactly. Vary sentence structure. Active voice. Strong specific verbs (built, shipped, cut, grew).
 Never use: leverage, utilize, synergy, spearheaded, orchestrated, deliverables, robust, innovative, cutting-edge, empower, transformative.
 Write like an engineer talking to an engineer.
-JSON only: {"humanizedBullets":["b1","b2","b3"],"humanizedOutreach":"text","newHumanScore":0-100}`;
+JSON only: {"humanizedBullets":["b1","b2","b3"],"humanizedOutreach":"text","newHumanScore":85}`;
 
 export async function humanizeContent({ bullets, outreachMessage, jobDescription }) {
   const message = await getClient().messages.create({
